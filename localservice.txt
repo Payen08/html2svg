@@ -1,0 +1,635 @@
+
+/**
+ * Converts HTML to Figma-compatible SVG by traversing the DOM
+ * and creating explicit <rect>, <text>, <image>, and <defs> elements.
+ * 
+ * Major Improvements:
+ * - **CRITICAL**: Fixed Sandbox Layout (1440x900 viewport) to prevent 0-height collapse
+ * - **NEW**: Support for Inline SVGs (Rasterizes to <image>)
+ * - Supports Linear Gradients (parses ComputedStyle)
+ * - Supports Box Shadows (converts to SVG Filters)
+ * - Supports Images
+ * - Better Text Positioning (Center-based)
+ * - Rasterizes Icon Fonts (Material Icons) to <image>
+ */
+
+let uuidCounter = 0;
+const getUniqueId = (prefix: string) => `${prefix}-${++uuidCounter}`;
+
+const escapeHtml = (unsafe: string) => {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+};
+
+export const convertHtmlToSvgLocal = async (htmlInput: string, optimize: boolean = false): Promise<string> => {
+  if (!htmlInput.trim()) return '';
+
+  return new Promise((resolve, reject) => {
+    try {
+      // 1. Create a sandbox container with FIXED dimensions to simulate a viewport
+      // This is crucial for 'h-screen', 'h-full', 'w-full' to work correctly.
+      const sandbox = document.createElement('div');
+      sandbox.style.position = 'fixed'; // Fixed to avoid affecting document scroll
+      sandbox.style.top = '0px';
+      sandbox.style.left = '0px';
+      sandbox.style.width = '1440px'; // Desktop width
+      sandbox.style.height = '900px'; // Desktop height
+      sandbox.style.opacity = '0'; // Hide from view but keep renderable
+      sandbox.style.zIndex = '-9999';
+      sandbox.style.all = 'initial'; 
+      sandbox.style.display = 'block';
+      sandbox.style.fontFamily = 'Inter, ui-sans-serif, system-ui, sans-serif'; 
+      // Ensure box-sizing is standard for web apps
+      sandbox.style.boxSizing = 'border-box';
+      
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlInput, 'text/html');
+      
+      if (doc.body.childNodes.length > 0) {
+          sandbox.innerHTML = doc.body.innerHTML;
+          Array.from(doc.body.attributes).forEach(attr => {
+              try { sandbox.setAttribute(attr.name, attr.value); } catch(e) {}
+          });
+      } else {
+          sandbox.innerHTML = htmlInput;
+      }
+
+      document.body.appendChild(sandbox);
+
+      // 2. Wait for styles (Tailwind + Fonts) to settle
+      setTimeout(() => {
+        try {
+          const rootRect = sandbox.getBoundingClientRect();
+          let svgElements = '';
+          let defsContent = '';
+          
+          const parseColor = (colorStr: string) => {
+            if (!colorStr || colorStr === 'rgba(0, 0, 0, 0)' || colorStr === 'transparent') return null;
+            return colorStr;
+          };
+
+          // Helper: Rasterize Text to Image (for Font Icons)
+          const renderTextToImage = (text: string, style: CSSStyleDeclaration, width: number, height: number): string => {
+             const canvas = document.createElement('canvas');
+             const scale = 4; 
+             canvas.width = Math.ceil(width * scale);
+             canvas.height = Math.ceil(height * scale);
+             const ctx = canvas.getContext('2d');
+             if (!ctx) return '';
+             
+             ctx.scale(scale, scale);
+             ctx.fillStyle = style.color;
+             const fontWeight = style.fontWeight || '400';
+             const fontSize = style.fontSize || '24px';
+             const fontFamily = style.fontFamily; 
+             ctx.font = `${fontWeight} ${fontSize} ${fontFamily}`;
+             ctx.textRendering = 'geometricPrecision';
+             ctx.textAlign = 'center';
+             ctx.textBaseline = 'middle'; 
+             ctx.fillText(text, width / 2, height / 2);
+             
+             return canvas.toDataURL('image/png');
+          };
+          
+          // Helper: Convert Inline SVG to Base64 Image
+          // This captures the exact visual state of an <svg> element including computed styles
+          const svgElementToImage = (svgEl: SVGElement, width: number, height: number): string => {
+              try {
+                  const serializer = new XMLSerializer();
+                  const svgString = serializer.serializeToString(svgEl);
+                  const encoded = btoa(unescape(encodeURIComponent(svgString)));
+                  return `data:image/svg+xml;base64,${encoded}`;
+              } catch (e) {
+                  return '';
+              }
+          };
+
+          const isIconFont = (fontFamily: string) => {
+             const lower = fontFamily.toLowerCase();
+             return lower.includes('material icons') || lower.includes('material symbols') || lower.includes('fontawesome') || lower.includes('icon');
+          };
+
+          const processBackground = (style: CSSStyleDeclaration, elementId: string): string | null => {
+            const bgImage = style.backgroundImage;
+            const bgColor = parseColor(style.backgroundColor);
+
+            // Handle Linear Gradients
+            if (bgImage && bgImage.includes('linear-gradient')) {
+              const gradId = getUniqueId('grad');
+              
+              let angle = 180;
+              const angleMatch = bgImage.match(/(\d+)deg/);
+              if (angleMatch) angle = parseInt(angleMatch[1]);
+              
+              const radian = (angle - 90) * (Math.PI / 180);
+              const x1 = 50 + 50 * Math.cos(radian + Math.PI);
+              const y1 = 50 + 50 * Math.sin(radian + Math.PI);
+              const x2 = 50 + 50 * Math.cos(radian);
+              const y2 = 50 + 50 * Math.sin(radian);
+
+              // Improved Regex for colors including spaces inside rgba
+              const stopMatches = bgImage.match(/(rgba?\([^)]+\)|hsla?\([^)]+\)|#[0-9a-fA-F]{3,8}|[a-z]+)\s*(\d+%|)/gi);
+              
+              if (stopMatches && stopMatches.length >= 2) {
+                 const stops = stopMatches.map((stop, index) => {
+                   const parts = stop.match(/(rgba?\([^)]+\)|hsla?\([^)]+\)|#[0-9a-fA-F]{3,8}|[a-z]+)\s*(\d+%)?/i);
+                   if (!parts) return '';
+                   const color = parts[1];
+                   const offset = parts[2] ? parts[2] : `${(index / (stopMatches.length - 1)) * 100}%`;
+                   return `<stop offset="${offset}" stop-color="${color}" />`;
+                 }).join('\n');
+
+                 defsContent += `
+                  <linearGradient id="${gradId}" x1="${x1}%" y1="${y1}%" x2="${x2}%" y2="${y2}%">
+                    ${stops}
+                  </linearGradient>`;
+                  
+                 return `url(#${gradId})`;
+              }
+            }
+            
+            return bgColor;
+          };
+
+          const processShadow = (style: CSSStyleDeclaration): string | null => {
+             const shadow = style.boxShadow;
+             if (!shadow || shadow === 'none') return null;
+             
+             const colorMatch = shadow.match(/rgba?\([^)]+\)|#[0-9a-fA-F]{3,8}/);
+             const numsMatch = shadow.match(/(-?\d+(\.\d+)?)px/g);
+             
+             if (colorMatch && numsMatch && numsMatch.length >= 2) {
+               const color = colorMatch[0];
+               const dx = parseFloat(numsMatch[0]);
+               const dy = parseFloat(numsMatch[1]);
+               const blur = numsMatch.length > 2 ? parseFloat(numsMatch[2]) : 0;
+               
+               const filterId = getUniqueId('shadow');
+               defsContent += `
+                <filter id="${filterId}" x="-50%" y="-50%" width="200%" height="200%">
+                  <feDropShadow dx="${dx}" dy="${dy}" stdDeviation="${blur / 2}" flood-color="${color}" flood-opacity="1"/>
+                </filter>
+               `;
+               return `filter="url(#${filterId})"`;
+             }
+             return null;
+          }
+
+          const walk = (node: Node) => {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              const el = node as HTMLElement;
+              const style = window.getComputedStyle(el);
+              const rect = el.getBoundingClientRect();
+              
+              const x = rect.left - rootRect.left;
+              const y = rect.top - rootRect.top;
+              const w = rect.width;
+              const h = rect.height;
+
+              // Skip collapsed elements (unless they have overflow visible, but generally 0x0 is invisible)
+              if (w <= 0 || h <= 0) return;
+              if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return;
+
+              // --- 1. SPECIAL: Inline SVG Elements ---
+              if (el.tagName.toLowerCase() === 'svg') {
+                  const dataUrl = svgElementToImage(el as unknown as SVGElement, w, h);
+                  if (dataUrl) {
+                      svgElements += `<image href="${dataUrl}" x="${x}" y="${y}" width="${w}" height="${h}" />\n`;
+                  }
+                  return;
+              }
+
+              // --- 2. Draw Images ---
+              if (el.tagName === 'IMG') {
+                const img = el as HTMLImageElement;
+                const src = img.currentSrc || img.src;
+                const rx = parseFloat(style.borderRadius || '0');
+                
+                let clipAttr = '';
+                if (rx > 0) {
+                    const clipId = getUniqueId('clip');
+                    defsContent += `<clipPath id="${clipId}"><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" /></clipPath>`;
+                    clipAttr = `clip-path="url(#${clipId})"`;
+                }
+                
+                svgElements += `<image href="${src}" x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice" ${clipAttr} />\n`;
+                
+                const borderColor = parseColor(style.borderColor);
+                const borderWidth = parseFloat(style.borderWidth);
+                if (borderColor && borderWidth > 0) {
+                   svgElements += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="none" stroke="${borderColor}" stroke-width="${borderWidth}" />\n`;
+                }
+                return;
+              }
+
+              // --- 3. Draw Backgrounds & Borders ---
+              const fill = processBackground(style, '');
+              const borderColor = parseColor(style.borderColor);
+              const borderWidth = parseFloat(style.borderWidth || '0');
+              const hasBorder = borderWidth > 0 && borderColor;
+              const shadowFilter = processShadow(style);
+
+              if (fill || hasBorder || shadowFilter) {
+                  const rx = parseFloat(style.borderRadius || style.borderTopLeftRadius || '0');
+                  const fillAttr = fill ? `fill="${fill}"` : 'fill="none"';
+                  const strokeAttr = hasBorder ? `stroke="${borderColor}" stroke-width="${borderWidth}"` : '';
+                  const filterAttr = shadowFilter ? shadowFilter : '';
+                  const opacity = style.opacity !== '1' ? `opacity="${style.opacity}"` : '';
+
+                  svgElements += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" ${fillAttr} ${strokeAttr} ${filterAttr} ${opacity} />\n`;
+              }
+              
+              Array.from(node.childNodes).forEach(walk);
+
+            } else if (node.nodeType === Node.TEXT_NODE) {
+              const text = node.textContent?.trim();
+              if (!text || !node.parentElement) return;
+
+              const parentStyle = window.getComputedStyle(node.parentElement);
+              if (parentStyle.display === 'none' || parentStyle.visibility === 'hidden' || parentStyle.opacity === '0') return;
+
+              const isIcon = isIconFont(parentStyle.fontFamily) || (node.parentElement.className && typeof node.parentElement.className === 'string' && node.parentElement.className.includes('material-icons'));
+
+              if (isIcon) {
+                  const parentRect = node.parentElement.getBoundingClientRect();
+                  let px = parentRect.left - rootRect.left;
+                  let py = parentRect.top - rootRect.top;
+                  let pw = parentRect.width;
+                  let ph = parentRect.height;
+                  
+                  const fontSize = parseFloat(parentStyle.fontSize);
+                  if (pw > ph * 1.5 && fontSize > 0) {
+                      const centerX = px + pw / 2;
+                      pw = fontSize;
+                      ph = fontSize;
+                      px = centerX - pw / 2;
+                  }
+
+                  if (pw > 0 && ph > 0) {
+                      const dataUrl = renderTextToImage(text, parentStyle, pw, ph);
+                      if (dataUrl) {
+                          svgElements += `<image href="${dataUrl}" x="${px}" y="${py}" width="${pw}" height="${ph}" />\n`;
+                      }
+                  }
+              } else {
+                  const range = document.createRange();
+                  range.selectNode(node);
+                  const textRect = range.getBoundingClientRect();
+                  
+                  if (textRect.width > 0 && textRect.height > 0) {
+                    const color = parentStyle.color;
+                    const fontSize = parentStyle.fontSize;
+                    const fontWeight = parentStyle.fontWeight;
+                    const letterSpacing = parentStyle.letterSpacing !== 'normal' ? `letter-spacing="${parentStyle.letterSpacing}"` : '';
+                    const opacity = parentStyle.opacity !== '1' ? `opacity="${parentStyle.opacity}"` : '';
+                    let fontFamily = parentStyle.fontFamily.replace(/"/g, "'");
+                    if (fontFamily.includes('sans-serif')) fontFamily = 'Inter, sans-serif'; 
+                    
+                    const cx = textRect.left - rootRect.left + (textRect.width / 2);
+                    const cy = textRect.top - rootRect.top + (textRect.height / 2);
+
+                    svgElements += `<text 
+                        x="${cx}" 
+                        y="${cy}" 
+                        fill="${color}" 
+                        font-family="${escapeHtml(fontFamily)}" 
+                        font-size="${fontSize}" 
+                        font-weight="${fontWeight}" 
+                        text-anchor="middle"
+                        dominant-baseline="central"
+                        ${letterSpacing}
+                        ${opacity}
+                        xml:space="preserve">${escapeHtml(text)}</text>\n`;
+                  }
+              }
+            }
+          };
+
+          Array.from(sandbox.childNodes).forEach(walk);
+
+          const rootStyle = window.getComputedStyle(sandbox);
+          const rootFill = processBackground(rootStyle, 'root');
+          const rootW = rootRect.width;
+          const rootH = rootRect.height;
+
+          if (rootFill) {
+            const rootBg = `<rect x="0" y="0" width="${rootW}" height="${rootH}" fill="${rootFill}" />\n`;
+            svgElements = rootBg + svgElements;
+          }
+
+          const svg = `<!-- Generated by HTML2SVG Local Engine -->
+<svg xmlns="http://www.w3.org/2000/svg" width="${rootW}" height="${rootH}" viewBox="0 0 ${rootW} ${rootH}">
+  <defs>
+    ${defsContent}
+  </defs>
+  ${svgElements}
+</svg>`;
+
+          resolve(svg);
+
+        } catch (e) {
+          console.error("Local conversion error:", e);
+          reject(e);
+        } finally {
+          if (document.body.contains(sandbox)) {
+             document.body.removeChild(sandbox);
+          }
+        }
+      }, 800); 
+
+    } catch (e) {
+      reject(e);
+    }
+  });
+};
+
+interface InheritedStyles {
+  fill?: string;
+  stroke?: string;
+  strokeWidth?: string;
+  fontFamily?: string;
+  fontSize?: string;
+  fontWeight?: string;
+}
+
+/**
+ * Converts SVG to HTML locally by mapping Rects, Texts, and Images to absolute positioned Divs.
+ * Complex paths are preserved as embedded SVGs.
+ * Handles style inheritance (fill, stroke, opacity) from <g> tags.
+ */
+export const convertSvgToHtmlLocal = async (svgInput: string): Promise<string> => {
+  return new Promise((resolve) => {
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(svgInput, "image/svg+xml");
+      const svg = doc.querySelector('svg');
+      
+      if (!svg) {
+        resolve('<!-- Invalid SVG content -->');
+        return;
+      }
+
+      // --- HELPERS ---
+
+      const getAttributeOrStyle = (el: Element, attr: string): string | null => {
+        let val = el.getAttribute(attr);
+        if (val) return val;
+        
+        const style = el.getAttribute('style');
+        if (style) {
+          const match = style.match(new RegExp(`${attr}\\s*:\\s*([^;]+)`, 'i'));
+          if (match) return match[1].trim();
+        }
+        return null;
+      };
+
+      const getVal = (val: string | null) => {
+        if (!val) return '0px';
+        if (val.match(/%|px|em|rem/)) return val;
+        return `${val}px`;
+      };
+
+      // --- INIT CANVAS ---
+
+      const widthAttr = getAttributeOrStyle(svg, 'width');
+      const heightAttr = getAttributeOrStyle(svg, 'height');
+      const viewBox = svg.getAttribute('viewBox');
+      
+      let w = '100%';
+      let h = '100%';
+      let viewBoxVal = '0 0 100 100';
+
+      if (widthAttr) w = getVal(widthAttr);
+      if (heightAttr) h = getVal(heightAttr);
+
+      if (viewBox) {
+         viewBoxVal = viewBox;
+         const parts = viewBox.split(/\s+|,/).filter(Boolean).map(parseFloat);
+         if (parts.length === 4) {
+             const vbW = parts[2];
+             const vbH = parts[3];
+             if (!widthAttr) w = `${vbW}px`;
+             if (!heightAttr) h = `${vbH}px`;
+         }
+      }
+
+      // --- EXTRACT DEFS ---
+      const defs = svg.querySelector('defs');
+      let defsHtml = '';
+      if (defs) {
+        const serializer = new XMLSerializer();
+        defsHtml = serializer.serializeToString(defs);
+      }
+
+      // --- EXTRACT ROOT STYLES FOR INHERITANCE ---
+      const rootFill = getAttributeOrStyle(svg, 'fill');
+      const rootStroke = getAttributeOrStyle(svg, 'stroke');
+      const rootStrokeWidth = getAttributeOrStyle(svg, 'stroke-width');
+      const rootFontFamily = getAttributeOrStyle(svg, 'font-family');
+      const rootFontSize = getAttributeOrStyle(svg, 'font-size');
+      const rootFontWeight = getAttributeOrStyle(svg, 'font-weight');
+
+      const initialStyles: InheritedStyles = {
+        fill: rootFill || undefined,
+        stroke: rootStroke || undefined,
+        strokeWidth: rootStrokeWidth || undefined,
+        fontFamily: rootFontFamily || undefined,
+        fontSize: rootFontSize || undefined,
+        fontWeight: rootFontWeight || undefined
+      };
+      
+      let outputHtml = '';
+
+      const processElement = (el: Element, inherited: InheritedStyles = {}) => {
+          const tag = el.tagName.toLowerCase();
+          
+          let x = getAttributeOrStyle(el, 'x') || '0';
+          let y = getAttributeOrStyle(el, 'y') || '0';
+          
+          // Inheritable Attributes processing
+          const ownFill = getAttributeOrStyle(el, 'fill');
+          const ownStroke = getAttributeOrStyle(el, 'stroke');
+          const ownStrokeWidth = getAttributeOrStyle(el, 'stroke-width');
+          const ownFontFamily = getAttributeOrStyle(el, 'font-family');
+          const ownFontSize = getAttributeOrStyle(el, 'font-size');
+          const ownFontWeight = getAttributeOrStyle(el, 'font-weight');
+          const opacity = getAttributeOrStyle(el, 'opacity') || getAttributeOrStyle(el, 'fill-opacity');
+          const filter = getAttributeOrStyle(el, 'filter');
+          const transform = getAttributeOrStyle(el, 'transform');
+
+          // Calculate effective styles for children
+          // Correct precedence: Own > Inherited
+          // Note: Check for !== null to ensure we respect explicit 'none' or '0' values
+          const currentStyles: InheritedStyles = {
+              fill: ownFill !== null ? ownFill : inherited.fill,
+              stroke: ownStroke !== null ? ownStroke : inherited.stroke,
+              strokeWidth: ownStrokeWidth !== null ? ownStrokeWidth : inherited.strokeWidth,
+              fontFamily: ownFontFamily !== null ? ownFontFamily : inherited.fontFamily,
+              fontSize: ownFontSize !== null ? ownFontSize : inherited.fontSize,
+              fontWeight: ownFontWeight !== null ? ownFontWeight : inherited.fontWeight,
+          };
+
+          let baseStyle = `position: absolute; left: ${getVal(x)}; top: ${getVal(y)};`;
+          
+          // --- 1. ForeignObject (HTML inside SVG) ---
+          if (tag === 'foreignobject') {
+             const width = getAttributeOrStyle(el, 'width');
+             const height = getAttributeOrStyle(el, 'height');
+             let style = `${baseStyle} width: ${getVal(width)}; height: ${getVal(height)}; overflow: hidden;`;
+             outputHtml += `<div style="${style}">${el.innerHTML}</div>\n`;
+             return;
+          }
+
+          // --- 2. GROUP (Recursive) ---
+          if (tag === 'g') {
+             // If group has visual effects (opacity, filter, transform), we MUST wrap it
+             let groupWrapperStart = '';
+             let groupWrapperEnd = '';
+             
+             if (opacity || filter || transform) {
+                 let groupStyle = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;';
+                 if (opacity) groupStyle += ` opacity: ${opacity};`;
+                 if (filter) {
+                     // Filtered groups are rasterized/handled as SVG blob fallback for now to ensure correctness
+                 } else {
+                     groupWrapperStart = `<div style="${groupStyle}">`;
+                     groupWrapperEnd = `</div>`;
+                 }
+             }
+
+             if (!filter) {
+                if (groupWrapperStart) outputHtml += groupWrapperStart;
+                Array.from(el.children).forEach(child => processElement(child, currentStyles));
+                if (groupWrapperEnd) outputHtml += groupWrapperEnd;
+                return;
+             }
+          }
+
+          // --- 3. RECT (Simple) ---
+          if (tag === 'rect') {
+             const width = getAttributeOrStyle(el, 'width');
+             const height = getAttributeOrStyle(el, 'height');
+             const rx = getAttributeOrStyle(el, 'rx');
+             
+             const fillToUse = ownFill !== null ? ownFill : inherited.fill;
+             const isComplexFill = fillToUse && fillToUse.includes('url(');
+             
+             if (!isComplexFill && !transform) {
+                 let style = `${baseStyle} width: ${getVal(width)}; height: ${getVal(height)};`;
+                 
+                 if (fillToUse && fillToUse !== 'none') style += ` background: ${fillToUse};`;
+                 if (rx) style += ` border-radius: ${getVal(rx)};`;
+                 
+                 const strokeToUse = ownStroke !== null ? ownStroke : inherited.stroke;
+                 const strokeW = (ownStrokeWidth !== null ? ownStrokeWidth : inherited.strokeWidth) || '1';
+                 
+                 if (strokeToUse && strokeToUse !== 'none') {
+                     style += ` border: ${getVal(strokeW)} solid ${strokeToUse}; box-sizing: border-box;`;
+                 }
+                 if (opacity) style += ` opacity: ${opacity};`;
+                 
+                 outputHtml += `  <div style="${style}"></div>\n`;
+                 return;
+             }
+          } 
+          
+          // --- 4. TEXT ---
+          if (tag === 'text') {
+             const textAnchor = getAttributeOrStyle(el, 'text-anchor'); 
+             const dominantBaseline = getAttributeOrStyle(el, 'dominant-baseline');
+             const color = ownFill !== null ? ownFill : (inherited.fill || 'inherit');
+             
+             let style = `${baseStyle} color: ${color}; white-space: pre; line-height: 1; pointer-events: none;`;
+             
+             const fSize = ownFontSize || inherited.fontSize;
+             const fFamily = ownFontFamily || inherited.fontFamily;
+             const fWeight = ownFontWeight || inherited.fontWeight;
+
+             if (fSize) style += ` font-size: ${getVal(fSize)};`;
+             if (fFamily) style += ` font-family: ${fFamily};`;
+             if (fWeight) style += ` font-weight: ${fWeight};`;
+             if (opacity) style += ` opacity: ${opacity};`;
+             
+             const transforms: string[] = [];
+             if (textAnchor === 'middle') transforms.push('translateX(-50%)');
+             else if (textAnchor === 'end') transforms.push('translateX(-100%)');
+
+             if (dominantBaseline === 'middle' || dominantBaseline === 'central') transforms.push('translateY(-50%)');
+             else if (!dominantBaseline || dominantBaseline === 'auto') transforms.push('translateY(-80%)');
+
+             if (transforms.length > 0) style += ` transform: ${transforms.join(' ')};`;
+             
+             outputHtml += `  <div style="${style}">${escapeHtml(el.textContent || '')}</div>\n`;
+             return;
+          }
+
+          // --- 5. IMAGE ---
+          if (tag === 'image') {
+              const width = getAttributeOrStyle(el, 'width');
+              const height = getAttributeOrStyle(el, 'height');
+              const href = el.getAttribute('href') || el.getAttribute('xlink:href');
+              
+              let style = `${baseStyle} width: ${getVal(width)}; height: ${getVal(height)}; object-fit: cover;`;
+              if (opacity) style += ` opacity: ${opacity};`;
+              outputHtml += `  <img src="${href}" style="${style}" />\n`;
+              return;
+          }
+
+          // --- DEFAULT: VECTOR LAYER ---
+          // Handles paths, circles, complex rects, or groups with filters.
+          // We wrap in a <g> to provide inherited styles explicitly to the SVG blob.
+          
+          const serializer = new XMLSerializer();
+          let elString = serializer.serializeToString(el);
+          
+          // Construct inherited attributes string for the wrapper group
+          let gAttrs = '';
+          if (inherited.fill) gAttrs += ` fill="${inherited.fill}"`;
+          if (inherited.stroke) gAttrs += ` stroke="${inherited.stroke}"`;
+          if (inherited.strokeWidth) gAttrs += ` stroke-width="${inherited.strokeWidth}"`;
+          if (inherited.fontFamily) gAttrs += ` font-family="${inherited.fontFamily}"`;
+          if (inherited.fontSize) gAttrs += ` font-size="${inherited.fontSize}"`;
+          if (inherited.fontWeight) gAttrs += ` font-weight="${inherited.fontWeight}"`;
+          
+          if (gAttrs) {
+              elString = `<g ${gAttrs}>${elString}</g>`;
+          }
+
+          outputHtml += `
+  <svg viewBox="${viewBoxVal}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible;">
+    ${elString}
+  </svg>\n`;
+      };
+
+      Array.from(svg.children).forEach(child => {
+          const tag = child.tagName.toLowerCase();
+          if (tag !== 'defs' && tag !== 'style') {
+              processElement(child, initialStyles);
+          }
+      });
+
+      const result = `<!-- Generated by SVG2HTML Local Engine -->
+<div style="
+  position: relative; 
+  width: ${w}; 
+  height: ${h}; 
+  background-color: transparent; 
+  overflow: hidden;
+">
+  <!-- Global Defs -->
+  <svg width="0" height="0" style="position:absolute; visibility:hidden;">
+    ${defsHtml}
+  </svg>
+  ${outputHtml}
+</div>`;
+
+      resolve(result);
+    } catch (e) {
+      resolve(`<!-- Error converting SVG locally: ${e} -->`);
+    }
+  });
+};

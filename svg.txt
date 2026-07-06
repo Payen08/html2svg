@@ -1,0 +1,24 @@
+<svg width="560" height="268" viewBox="0 0 560 268" fill="none" xmlns="http://www.w3.org/2000/svg">
+<foreignObject x="0" y="0" width="560" height="268"><div xmlns="http://www.w3.org/1999/xhtml" style="backdrop-filter:blur(0px);clip-path:url(#bgblur_0_3115_47639_clip_path);height:100%;width:100%"></div></foreignObject><g filter="url(#filter0_d_3115_47639)" data-figma-bg-blur-radius="0">
+<path d="M30 40C30 34.4772 34.4772 30 40 30H520C525.523 30 530 34.4772 530 40V228C530 233.523 525.523 238 520 238H40C34.4771 238 30 233.523 30 228V40Z" fill="white"/>
+</g>
+<text fill="black" xml:space="preserve" style="white-space: pre" font-family="PingFang TC" font-size="20" font-weight="500" letter-spacing="0em"><tspan x="62" y="77.2">&#x9000;&#x51fa;&#x7f16;&#x8f91;&#x6a21;&#x5f0f;</tspan></text>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M487.941 69.9996L483.168 65.2267L484.229 64.166L489.002 68.939L493.775 64.166L494.835 65.2267L490.062 69.9996L494.835 74.7726L493.775 75.8333L489.002 71.0603L484.229 75.8333L483.168 74.7726L487.941 69.9996Z" fill="#666666"/>
+<text fill="#333333" xml:space="preserve" style="white-space: pre" font-family="PingFang SC" font-size="14" letter-spacing="0em"><tspan x="64" y="131.04">&#x68c0;&#x6d4b;&#x5230;&#x60a8;&#x6709;&#x672a;&#x4fdd;&#x5b58;&#x7684;&#x7f16;&#x8f91;&#x8bb0;&#x5f55;&#xff0c;&#x8bf7;&#x9009;&#x62e9;&#x64cd;&#x4f5c;</tspan></text>
+<rect x="398" y="174" width="100" height="40" rx="5" fill="#241F7D"/>
+<text fill="white" xml:space="preserve" style="white-space: pre" font-family="PingFang SC" font-size="14" font-weight="500" letter-spacing="0em"><tspan x="413" y="199.04">&#x4fdd;&#x5b58;&#x5e76;&#x9000;&#x51fa;</tspan></text>
+<rect x="278.5" y="174.5" width="99" height="39" rx="4.5" fill="white" stroke="#DDDDDD"/>
+<text fill="#999999" xml:space="preserve" style="white-space: pre" font-family="PingFang SC" font-size="14" letter-spacing="0em"><tspan x="300" y="199.04">&#x76f4;&#x63a5;&#x9000;&#x51fa;</tspan></text>
+<defs>
+<filter id="filter0_d_3115_47639" x="0" y="0" width="560" height="268" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset/>
+<feGaussianBlur stdDeviation="15"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0.00137202 0 0 0 0 0.00137202 0 0 0 0 0.00137202 0 0 0 0.05 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_3115_47639"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_3115_47639" result="shape"/>
+</filter>
+<clipPath id="bgblur_0_3115_47639_clip_path" transform="translate(0 0)"><path d="M30 40C30 34.4772 34.4772 30 40 30H520C525.523 30 530 34.4772 530 40V228C530 233.523 525.523 238 520 238H40C34.4771 238 30 233.523 30 228V40Z"/>
+</clipPath></defs>
+</svg>
