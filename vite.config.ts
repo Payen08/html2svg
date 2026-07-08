@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
 
   return {
-    base: '/html2svg/',
+    base: mode === 'production' ? '/html2svg/' : '/',
     server: {
       port: 3100,
       host: '0.0.0.0',
@@ -37,10 +37,12 @@ export default defineConfig(({ mode }) => {
 
           let lastProxyContext: { targetOrigin: string; proxyPrefix: string } | null = null;
 
-          const isAllowedProxyHost = (hostname: string) => {
+          const isLocalOrPrivateHost = (hostname: string) => {
             if (['localhost', '127.0.0.1', '0.0.0.0', '[::1]'].includes(hostname)) return true;
             return /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})$/.test(hostname);
           };
+
+          const isAllowedProxyHost = (hostname: string) => Boolean(hostname);
 
           const viteClientStub = `
 const __html2svgStyles = new Map();
@@ -96,7 +98,15 @@ export default {};
 
           const reactRefreshStub = `
 export function injectIntoGlobalHook() {}
-export function register() {}
+export function register(type) {
+  return type;
+}
+export function getRefreshReg(filename) {
+  return (type, id) => register(type, filename + ' ' + id);
+}
+export function getRefreshSig() {
+  return createSignatureFunctionForTransform();
+}
 export function createSignatureFunctionForTransform() {
   return (type) => type;
 }
@@ -120,6 +130,8 @@ export function validateRefreshBoundaryAndEnqueueUpdate() {
 export default {
   injectIntoGlobalHook,
   register,
+  getRefreshReg,
+  getRefreshSig,
   createSignatureFunctionForTransform,
   performReactRefresh,
   __hmr_import,
@@ -237,6 +249,9 @@ export default {
         resolved.pathname.indexOf('/proxy-url/') !== 0
       ) {
         return proxyPrefix + nextPath;
+      }
+      if (/^https?:$/.test(resolved.protocol)) {
+        return '/proxy-url/' + encodeURIComponent(resolved.origin) + nextPath;
       }
     } catch(e) {}
     return value;
@@ -423,7 +438,7 @@ export default {
               try {
                 const parsedOrigin = new URL(decodeURIComponent(encodedOrigin));
                 if (!['http:', 'https:'].includes(parsedOrigin.protocol) || !isAllowedProxyHost(parsedOrigin.hostname)) {
-                  sendError(res, 403, 'Only localhost/private IP origins are allowed.');
+                  sendError(res, 403, 'Only valid http/https origins are allowed.');
                   return;
                 }
                 const proxyPrefix = `/proxy-url/${encodedOrigin}`;
@@ -468,7 +483,7 @@ export default {
               if (!target) { sendError(res, 400, 'Missing url'); return; }
               let parsedTarget: URL;
               try { parsedTarget = new URL(target); } catch { sendError(res, 400, 'Invalid URL'); return; }
-              if (!isAllowedProxyHost(parsedTarget.hostname)) { sendError(res, 403, 'Not local'); return; }
+              if (!isLocalOrPrivateHost(parsedTarget.hostname)) { sendError(res, 403, 'Not local'); return; }
 
               const urls = [target];
               if (parsedTarget.hostname === 'localhost') urls.unshift(target.replace('localhost', '127.0.0.1'));

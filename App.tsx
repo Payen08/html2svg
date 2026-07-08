@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, Code, Github, Zap, Cpu, Settings2, Box, ArrowRightLeft, Upload, FileCode2, Globe, Link, FolderOpen, Plus, X, Layers, Loader2, CheckCircle, AlertCircle, Download } from 'lucide-react';
+import { Sparkles, Code, Github, Zap, Cpu, Settings2, Box, ArrowRightLeft, Upload, FileCode2, Globe, Link, FolderOpen, Plus, X, Layers, Loader2, CheckCircle, AlertCircle, Download, Maximize2 } from 'lucide-react';
 import { Button } from './components/Button';
 import { SvgPreview } from './components/SvgPreview';
 import { HtmlPreview } from './components/HtmlPreview';
 import { convertHtmlToSvg } from './services/geminiService';
 import { convertHtmlToSvgLocal, convertSvgToHtmlLocal } from './services/localService';
+import { exportToFigmaJSON } from './services/figmaExportService';
 import { fetchUrlContent } from './services/urlFetchService';
 import { convertUrlToSvgWithForeignObject } from './services/urlScreenshotService';
 import { createInteractiveCapture, InteractiveCaptureHandle } from './services/interactiveCaptureService';
@@ -57,8 +58,10 @@ function App() {
   const [interactiveError, setInteractiveError] = useState<string | null>(null);
   const [interactiveSessionKey, setInteractiveSessionKey] = useState(0);
   const captureCountRef = useRef(0);
+  const [isFigmaExporting, setIsFigmaExporting] = useState(false);
   const [viewportW, setViewportW] = useState(1440);
   const [viewportH, setViewportH] = useState(900);
+  const [isViewportCustom, setIsViewportCustom] = useState(false);
 
   // Resizable panel state
   const [leftPanelRatio, setLeftPanelRatio] = useState(50); // percentage
@@ -154,6 +157,71 @@ function App() {
         error: err.message || "An unexpected error occurred",
         svgContent: null
       });
+    }
+  };
+
+  // Export Figma Design JSON
+  const handleExportFigmaJSON = async () => {
+    try {
+      let htmlToConvert = inputHtml;
+      let fetchedUrl = '';
+
+      if (inputMode === InputMode.URL) {
+        if (!inputUrl.trim()) return;
+        setIsFigmaExporting(true);
+
+        try {
+          const result = await fetchUrlContent(inputUrl);
+          htmlToConvert = result.html;
+          fetchedUrl = result.url;
+        } catch (err: any) {
+          alert('无法获取网页内容: ' + (err.message || '未知错误'));
+          setIsFigmaExporting(false);
+          return;
+        }
+      } else {
+        if (!htmlToConvert.trim()) return;
+        setIsFigmaExporting(true);
+      }
+
+      let effectiveBaseUrl = fetchedUrl || localFileBaseUrl || '';
+      let directUrl: string | undefined;
+
+      // Proxy logic for localhost URLs (same as handleHtmlToSvg)
+      if (inputMode === InputMode.URL && fetchedUrl) {
+        try {
+          const fetchedParsed = new URL(fetchedUrl);
+          const isLocal = ['localhost', '127.0.0.1'].includes(fetchedParsed.hostname);
+          if (isLocal && fetchedParsed.port) {
+            const proxyBase = `/proxy/${fetchedParsed.port}`;
+            const originalPath = fetchedParsed.pathname || '/';
+            directUrl = `${proxyBase}${originalPath}`;
+            effectiveBaseUrl = `${proxyBase}/`;
+            htmlToConvert = htmlToConvert
+              .replace(/<base\b[^>]*\/?>/gi, '')
+              .replace(/((?:src|href)=["'])\/(?!\/)/g, `$1${proxyBase}/`);
+          }
+        } catch { /* keep original URL if parsing fails */ }
+      }
+
+      const figmaData = await exportToFigmaJSON(htmlToConvert, effectiveBaseUrl, directUrl);
+
+      // Download JSON file
+      const jsonStr = JSON.stringify(figmaData, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'figma-design.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error('Figma JSON export failed:', err);
+      alert('导出失败: ' + (err.message || '未知错误'));
+    } finally {
+      setIsFigmaExporting(false);
     }
   };
 
@@ -386,26 +454,19 @@ function App() {
 
   // Start interactive preview: set mode, useEffect creates iframe after DOM ready
   const pendingInteractiveUrlRef = useRef<string>('');
-
-  const isProxyableLocalHost = (hostname: string) => {
-    if (['localhost', '127.0.0.1', '0.0.0.0', '[::1]', '::1'].includes(hostname)) {
-      return true;
-    }
-
-    return /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})$/.test(hostname);
-  };
+  const forceAutoViewportRef = useRef(false);
 
   const getInteractiveProxyInfo = (url: string) => {
     const parsed = new URL(url);
 
-    if (!isProxyableLocalHost(parsed.hostname) || !parsed.port) {
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
       return { finalUrl: url, baseUrl: '' };
     }
 
-    if (['localhost', '127.0.0.1'].includes(parsed.hostname)) {
+    if (['localhost', '127.0.0.1'].includes(parsed.hostname) && parsed.port) {
       const proxyPrefix = `/proxy/${parsed.port}`;
       return {
-        finalUrl: `${proxyPrefix}${parsed.pathname || '/'}${parsed.search || ''}`,
+        finalUrl: `${proxyPrefix}${parsed.pathname || '/'}${parsed.search || ''}${parsed.hash || ''}`,
         baseUrl: `${proxyPrefix}/`,
       };
     }
@@ -413,7 +474,7 @@ function App() {
     const encodedOrigin = encodeURIComponent(parsed.origin);
     const proxyPrefix = `/proxy-url/${encodedOrigin}`;
     return {
-      finalUrl: `${proxyPrefix}${parsed.pathname || '/'}${parsed.search || ''}`,
+      finalUrl: `${proxyPrefix}${parsed.pathname || '/'}${parsed.search || ''}${parsed.hash || ''}`,
       baseUrl: `${proxyPrefix}/`,
     };
   };
@@ -439,10 +500,37 @@ function App() {
     }
   };
 
-  const startInteractivePreview = () => {
+  const clampViewportSize = (value: number) => {
+    if (!Number.isFinite(value)) return 320;
+    return Math.max(320, Math.min(2560, Math.round(value)));
+  };
+
+  const getDefaultInteractiveViewport = () => {
+    const rect = interactiveContainerRef.current?.getBoundingClientRect();
+    return {
+      width: clampViewportSize(rect?.width || window.innerWidth || viewportW),
+      height: clampViewportSize(rect?.height || window.innerHeight || viewportH),
+    };
+  };
+
+  const handleViewportWChange = (value: string) => {
+    setIsViewportCustom(true);
+    setViewportW(clampViewportSize(Number(value)));
+  };
+
+  const handleViewportHChange = (value: string) => {
+    setIsViewportCustom(true);
+    setViewportH(clampViewportSize(Number(value)));
+  };
+
+  const startInteractivePreview = (forceAutoViewport = false) => {
     if (!inputUrl.trim()) return;
     setInteractiveError(null);
     setIsInteractiveReady(false);
+    if (forceAutoViewport) {
+      forceAutoViewportRef.current = true;
+      setIsViewportCustom(false);
+    }
 
     // Normalize URL
     let url = inputUrl.trim();
@@ -478,7 +566,20 @@ function App() {
         ({ finalUrl, baseUrl } = getInteractiveProxyInfo(url));
       } catch { /* keep original */ }
 
-      const handle = createInteractiveCapture(finalUrl, baseUrl, viewportW, viewportH);
+      const shouldUseAutoViewport = forceAutoViewportRef.current || !isViewportCustom;
+      forceAutoViewportRef.current = false;
+
+      const viewport = shouldUseAutoViewport
+        ? getDefaultInteractiveViewport()
+        : { width: viewportW, height: viewportH };
+
+      if (shouldUseAutoViewport) {
+        setIsViewportCustom(false);
+        setViewportW(viewport.width);
+        setViewportH(viewport.height);
+      }
+
+      const handle = createInteractiveCapture(finalUrl, baseUrl, viewport.width, viewport.height);
       interactiveRef.current = handle;
 
       interactiveContainerRef.current.innerHTML = '';
@@ -1035,6 +1136,16 @@ function App() {
                 >
                   {conversionMode === ConversionMode.AI ? 'Generate Vectors' : 'Render Local'}
                 </Button>
+                {conversionMode === ConversionMode.LOCAL && (
+                  <Button
+                    onClick={handleExportFigmaJSON}
+                    isLoading={isFigmaExporting}
+                    className="w-full mt-2 shadow-lg shadow-purple-900/20 bg-purple-600 hover:bg-purple-700 focus:ring-purple-500"
+                    icon={<Download className="w-4 h-4" />}
+                  >
+                    导出 Figma JSON
+                  </Button>
+                )}
                 {svgState.error && (
                   <p className="mt-2 text-xs text-red-400 text-center animate-pulse">
                     {svgState.error}
@@ -1109,11 +1220,11 @@ function App() {
                   )}
                   {/* Viewport size controls */}
                   <div className="flex items-center space-x-1.5 text-[10px] text-gray-400">
-                    <span>画面:</span>
+                    <span>{isViewportCustom ? '自定义:' : '画面:'}</span>
                     <input
                       type="number"
                       value={viewportW}
-                      onChange={(e) => setViewportW(Number(e.target.value) || 375)}
+                      onChange={(e) => handleViewportWChange(e.target.value)}
                       className="w-14 px-1.5 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:border-gray-600"
                       min={320}
                       max={2560}
@@ -1122,14 +1233,21 @@ function App() {
                     <input
                       type="number"
                       value={viewportH}
-                      onChange={(e) => setViewportH(Number(e.target.value) || 667)}
+                      onChange={(e) => handleViewportHChange(e.target.value)}
                       className="w-14 px-1.5 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:border-gray-600"
                       min={320}
                       max={2560}
                     />
                     <button
+                      onClick={() => startInteractivePreview(true)}
+                      className="p-0.5 text-gray-500 hover:text-white ml-1"
+                      title="适配当前预览区域"
+                    >
+                      <Maximize2 className="w-3 h-3" />
+                    </button>
+                    <button
                       onClick={() => startInteractivePreview()}
-                      className="text-gray-500 hover:text-white ml-1"
+                      className="text-gray-500 hover:text-white"
                       title="应用新尺寸"
                     >
                       ⟳

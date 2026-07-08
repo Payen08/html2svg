@@ -103,13 +103,21 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
     setIsDragging(false);
   };
 
-  const handleWheel = (e: React.WheelEvent) => {
+  const handleWheel = (e: WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const delta = e.deltaY > 0 ? -0.1 : 0.1;
       setZoom(z => Math.max(0.1, Math.min(5, z + delta)));
     }
   };
+
+  // Attach wheel listener with { passive: false } to allow preventDefault
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, []);
 
   const resetView = () => {
     setPan({ x: 0, y: 0 });
@@ -280,7 +288,6 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        onWheel={handleWheel}
       >
         <div
           ref={containerRef}

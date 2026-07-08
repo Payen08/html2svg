@@ -22,9 +22,24 @@ export interface InteractiveCaptureHandle {
     destroy: () => void;
 }
 
-function freezeCapturedHtml(html: string): string {
+function freezeCapturedHtml(html: string, proxyPrefix?: string): string {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
+
+    // Rewrite absolute paths to go through proxy (e.g. /@vite/client → /proxy/51078/@vite/client)
+    // This prevents CORS errors when the captured HTML is rendered in a new srcdoc iframe
+    if (proxyPrefix) {
+        doc.querySelectorAll('[src], [href]').forEach((el) => {
+            const src = el.getAttribute('src');
+            const href = el.getAttribute('href');
+            if (src && src.startsWith('/') && !src.startsWith('//')) {
+                el.setAttribute('src', proxyPrefix.replace(/\/$/, '') + src);
+            }
+            if (href && href.startsWith('/') && !href.startsWith('//') && !href.startsWith(proxyPrefix)) {
+                el.setAttribute('href', proxyPrefix.replace(/\/$/, '') + href);
+            }
+        });
+    }
 
     doc.querySelectorAll('script, noscript, base').forEach((node) => node.remove());
     doc.querySelectorAll('*').forEach((node) => {
@@ -35,7 +50,7 @@ function freezeCapturedHtml(html: string): string {
         });
     });
 
-    return `<!DOCTYPE html>\n${doc.documentElement.outerHTML}`;
+    return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
 }
 
 function getDocumentBaseUrl(currentUrl: string, fallbackBaseUrl: string): string | undefined {
@@ -160,7 +175,9 @@ export function createInteractiveCapture(
         }
 
         const convertCapturedHtml = async (html: string, currentUrl: string): Promise<InteractiveCaptureResult> => {
-            const currentHtml = freezeCapturedHtml(html);
+            // Rewrite absolute paths through proxy (e.g. /@vite/client → /proxy/51078/@vite/client)
+            const proxyPrefix = baseUrl || '';
+            const currentHtml = freezeCapturedHtml(html, proxyPrefix);
             const currentBaseUrl = getDocumentBaseUrl(currentUrl, baseUrl);
             let svg = await convertHtmlToSvgLocal(currentHtml, false, currentBaseUrl, false, undefined, false);
             if (isSvgLikelyBlank(svg) && capturedHtmlHasVisibleContent(currentHtml)) {

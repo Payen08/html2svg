@@ -566,6 +566,39 @@ export const convertHtmlToSvgLocal = async (
               return `<clipPath id="${clipId}"><path d="${d}" /></clipPath>`;
             };
 
+            // --- STRUCTURED SVG: Element Naming for Figma Layers ---
+            const UTILITY_CLASS_PREFIXES = [
+              'flex', 'block', 'inline', 'grid', 'hidden', 'visible', 'relative', 'absolute',
+              'fixed', 'sticky', 'overflow', 'z-', 'cursor-', 'transition', 'transform',
+              'animate', 'duration', 'ease', 'delay', 'will-change',
+              'p-', 'px-', 'py-', 'pt-', 'pr-', 'pb-', 'pl-', 'm-', 'mx-', 'my-',
+              'mt-', 'mr-', 'mb-', 'ml-', 'w-', 'h-', 'min-w-', 'min-h-', 'max-w-', 'max-h-',
+              'bg-', 'text-xs', 'text-sm', 'text-base', 'text-lg', 'text-xl', 'text-2xl',
+              'text-3xl', 'text-4xl', 'text-5xl', 'font-', 'leading-', 'tracking-',
+              'rounded', 'border', 'shadow', 'opacity-', 'ring-',
+              'gap-', 'space-', 'divide-', 'place-', 'items-', 'justify-', 'self-',
+              'col-', 'row-', 'order-', 'grow', 'shrink', 'basis-',
+              'top-', 'right-', 'bottom-', 'left-', 'inset-',
+              'sr-only', 'not-sr-only', 'antialiased', 'subpixel-antialiased',
+              'object-', 'aspect-', 'float-', 'clear-',
+            ];
+
+            /** Generate a meaningful name for an SVG group from a DOM element */
+            const getElementName = (el: HTMLElement): string => {
+              // Priority 1: element id
+              if (el.id) return el.id;
+              // Priority 2: first meaningful CSS class
+              if (typeof el.className === 'string' && el.className) {
+                const classes = el.className.split(/\s+/).filter(c => c.length > 0);
+                for (const cls of classes) {
+                  const isUtility = UTILITY_CLASS_PREFIXES.some(prefix => cls.startsWith(prefix));
+                  if (!isUtility && cls.length > 1) return cls;
+                }
+              }
+              // Priority 3: tag name
+              return el.tagName.toLowerCase();
+            };
+
             const walk = async (node: Node) => {
               if (node.nodeType === Node.ELEMENT_NODE) {
                 const el = node as HTMLElement;
@@ -579,12 +612,25 @@ export const convertHtmlToSvgLocal = async (
                 const w = rect.width;
                 const h = rect.height;
 
+                // Skip non-visual elements entirely
+                const tag = el.tagName.toUpperCase();
+                if (['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'BR', 'WBR', 'COL', 'COLGROUP'].includes(tag)) return;
+
                 // Slightly less strict visibility check - we now trust our pre-pass somewhat, 
                 // but still want to skip things that are truly gone.
                 // However, things with 0px height might have children with height (overflow visible), 
                 // so we MUST check scrollHeight or just let it pass if children are interesting.
                 const isHidden = style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0;
                 if (isHidden) return;
+
+                // --- STRUCTURED SVG: Open named group for this element ---
+                const groupName = getElementName(el);
+                const safeGroupName = escapeXml(groupName);
+                // XML ids must start with a letter
+                let sanitized = groupName.replace(/[^a-zA-Z0-9_-]/g, '_');
+                if (!/^[a-zA-Z]/.test(sanitized)) sanitized = 'e' + sanitized;
+                const safeGroupId = getUniqueId(sanitized);
+                svgElements += `<g id="${safeGroupId}" data-name="${safeGroupName}">\n`;
 
                 // --- RASTERIZATION DISABLED ---
                 // The foreignObject snapshot approach causes CORS errors with external resources.
@@ -597,6 +643,7 @@ export const convertHtmlToSvgLocal = async (
                   if (dataUrl && w > 0 && h > 0) {
                     svgElements += `<image href="${dataUrl}" x="${x}" y="${y}" width="${w}" height="${h}" />\n`;
                   }
+                  svgElements += `</g>\n`;
                   return;
                 }
 
@@ -607,6 +654,7 @@ export const convertHtmlToSvgLocal = async (
                   if (inlineSvg && w > 0 && h > 0) {
                     svgElements += `${inlineSvg}\n`;
                   }
+                  svgElements += `</g>\n`;
                   return;
                 }
 
@@ -635,6 +683,7 @@ export const convertHtmlToSvgLocal = async (
                       svgElements += renderShape(x, y, w, h, imgRadii, 'fill="none"', `stroke="${imgBorderColor}" stroke-width="${imgBorderWidth}"`, '', '');
                     }
                   }
+                  svgElements += `</g>\n`;
                   return;
                 }
 
@@ -717,7 +766,8 @@ export const convertHtmlToSvgLocal = async (
                     svgElements += `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + h}" stroke="${borders.left.c}" stroke-width="${borders.left.w}" />\n`;
                 }
 
-                // Overflow clipping: wrap children in <g clip-path> if overflow is hidden
+                // Overflow clipping: wrap children in <g clip-path> if overflow is hidden.
+                // This keeps the legacy vector renderer stable for Figma-oriented exports.
                 const overflowVal = style.overflow;
                 const hasOverflowClip = (overflowVal === 'hidden' || overflowVal === 'clip'
                   || style.overflowX === 'hidden' || style.overflowY === 'hidden'
@@ -736,6 +786,9 @@ export const convertHtmlToSvgLocal = async (
                 if (hasOverflowClip) {
                   svgElements += `</g>\n`;
                 }
+
+                // Close the named group for this element
+                svgElements += `</g>\n`;
 
               } else if (node.nodeType === Node.TEXT_NODE) {
                 const originalText = node.textContent?.trim();
@@ -797,14 +850,7 @@ export const convertHtmlToSvgLocal = async (
                   // We need to position text so its visual top matches textRect.top
                   const tx = textRect.left - rootRect.left;
                   const ty = textRect.top - rootRect.top;
-
-                  // For SVG text, the y coordinate is at the baseline
-                  // textRect.height is the visual height of the text
-                  // Typically, the baseline is about 75-80% down from the top of the em box
-                  // But textRect gives us the actual rendered bounds, so we use it directly
-                  const fontSizeNum = parseFloat(fontSize);
-                  // Use the actual textRect height to calculate offset, ensuring visual alignment
-                  const baselineOffset = textRect.height * 0.75; // More accurate than fontSize * 0.8
+                  const baselineOffset = textRect.height * 0.75;
 
                   svgElements += `<text
                              x="${tx}"
@@ -841,9 +887,11 @@ export const convertHtmlToSvgLocal = async (
             }
 
             // Walk the DOM tree
+            console.log('[HTML2SVG] Starting DOM walk, root children:', rootElement.childNodes.length);
             for (const child of Array.from(rootElement.childNodes)) {
               await walk(child);
             }
+            console.log('[HTML2SVG] Walk complete, svgElements length:', svgElements.length, 'defs length:', defsContent.length);
 
             const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <!-- Generated by HTML2SVG Local Engine -->
