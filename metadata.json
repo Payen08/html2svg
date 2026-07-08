@@ -1,5 +1,0 @@
-{
-  "name": "HTML2SVG AI Converter",
-  "description": "A smart tool that uses Gemini AI to convert HTML/CSS snippets into clean, scalable, and editable SVG vector graphics.",
-  "requestFramePermissions": []
-}
