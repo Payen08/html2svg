@@ -582,6 +582,25 @@ function App() {
       const handle = createInteractiveCapture(finalUrl, baseUrl, viewport.width, viewport.height);
       interactiveRef.current = handle;
 
+      // Auto-fit: if iframe is wider than container, scale it down
+      const containerWidth = interactiveContainerRef.current.clientWidth;
+      const scale = containerWidth > 0 && viewport.width > containerWidth
+        ? Math.max(0.25, (containerWidth - 32) / viewport.width)
+        : 1;
+
+      // Center iframe in container (like Chrome DevTools device preview)
+      handle.iframe.style.display = 'block';
+      handle.iframe.style.margin = '0 auto';
+      handle.iframe.style.boxShadow = '0 4px 24px rgba(0,0,0,0.3)';
+      handle.iframe.style.borderRadius = '4px';
+      handle.iframe.style.transform = `scale(${scale})`;
+      handle.iframe.style.transformOrigin = 'top center';
+
+      // Adjust container to account for scaled height
+      if (scale < 1) {
+        interactiveContainerRef.current.style.overflow = 'hidden';
+      }
+
       interactiveContainerRef.current.innerHTML = '';
       interactiveContainerRef.current.appendChild(handle.iframe);
       setIsInteractiveReady(true);
@@ -626,7 +645,7 @@ function App() {
       setActivePageId(pageId);
       setSvgState(prev => ({ ...prev, svgContent: svg }));
       setInteractiveError(null);
-      setRenderMode(RenderMode.BROWSER);
+      setRenderMode(RenderMode.FIGMA);
     } catch (err: any) {
       console.error('Capture failed:', err);
       const message = err.message || '捕获失败';
@@ -1218,40 +1237,38 @@ function App() {
                       {interactiveError}
                     </span>
                   )}
-                  {/* Viewport size controls */}
-                  <div className="flex items-center space-x-1.5 text-[10px] text-gray-400">
-                    <span>{isViewportCustom ? '自定义:' : '画面:'}</span>
+                  {/* Device preset toolbar — like Chrome DevTools */}
+                  <div className="flex items-center space-x-1 text-[10px] text-gray-400">
+                    <span className="mr-1">画面:</span>
+                    {[
+                      { label: '📱 SE', w: 375, h: 667 },
+                      { label: '📱 14', w: 390, h: 844 },
+                      { label: '� Pad', w: 768, h: 1024 },
+                      { label: '💻 HD', w: 1280, h: 720 },
+                      { label: '🖥 FHD', w: 1920, h: 1080 },
+                    ].map(p => (
+                      <button
+                        key={p.label}
+                        onClick={() => { setViewportW(p.w); setViewportH(p.h); setIsViewportCustom(true); startInteractivePreview(false); }}
+                        className={`px-1.5 py-0.5 rounded hover:bg-gray-700 hover:text-white transition-colors ${viewportW === p.w && viewportH === p.h ? 'bg-gray-700 text-white' : ''}`}
+                        title={`${p.label} ${p.w}×${p.h}`}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                    <span className="mx-1 text-gray-600">|</span>
                     <input
-                      type="number"
-                      value={viewportW}
-                      onChange={(e) => handleViewportWChange(e.target.value)}
-                      className="w-14 px-1.5 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:border-gray-600"
-                      min={320}
-                      max={2560}
+                      type="number" value={viewportW}
+                      onChange={(e) => setViewportW(Number(e.target.value) || 375)}
+                      className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:border-gray-600" min={320} max={2560}
                     />
                     <span>×</span>
                     <input
-                      type="number"
-                      value={viewportH}
-                      onChange={(e) => handleViewportHChange(e.target.value)}
-                      className="w-14 px-1.5 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:border-gray-600"
-                      min={320}
-                      max={2560}
+                      type="number" value={viewportH}
+                      onChange={(e) => setViewportH(Number(e.target.value) || 667)}
+                      className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:border-gray-600" min={320} max={2560}
                     />
-                    <button
-                      onClick={() => startInteractivePreview(true)}
-                      className="p-0.5 text-gray-500 hover:text-white ml-1"
-                      title="适配当前预览区域"
-                    >
-                      <Maximize2 className="w-3 h-3" />
-                    </button>
-                    <button
-                      onClick={() => startInteractivePreview()}
-                      className="text-gray-500 hover:text-white"
-                      title="应用新尺寸"
-                    >
-                      ⟳
-                    </button>
+                    <button onClick={() => startInteractivePreview()} className="text-gray-500 hover:text-white" title="应用尺寸">⟳</button>
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -1277,7 +1294,8 @@ function App() {
               {/* Interactive iframe */}
               <div
                 ref={interactiveContainerRef}
-                className="flex-1 bg-white overflow-auto"
+                className="flex-1 bg-gray-200 overflow-auto flex justify-center"
+                style={{ padding: '16px 0' }}
               />
             </div>
           ) : isHtmlToSvg ? (

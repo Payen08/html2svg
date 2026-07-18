@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => {
   return {
     base: mode === 'production' ? '/html2svg/' : '/',
     server: {
-      port: 3100,
+      port: 36782,
       host: '0.0.0.0',
     },
     plugins: [

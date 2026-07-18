@@ -19,19 +19,23 @@ export const convertHtmlToSvgLocal = async (
   baseUrl?: string,
   rasterizeText: boolean = false,
   directUrl?: string,
-  executeScripts: boolean = true
+  executeScripts: boolean = true,
+  viewportW?: number,
+  viewportH?: number,
 ): Promise<string> => {
   if (!htmlInput.trim()) return '';
 
+  const iframeW = viewportW || 1440;
+  const iframeH = viewportH || 900;
+
   return new Promise((resolve, reject) => {
     try {
-      // Create an iframe with srcdoc and proper sandbox settings
       const iframe = document.createElement('iframe');
       iframe.style.position = 'fixed';
       iframe.style.top = '0px';
       iframe.style.left = '0px';
-      iframe.style.width = '1440px';
-      iframe.style.height = '900px';
+      iframe.style.width = iframeW + 'px';
+      iframe.style.height = iframeH + 'px';
       iframe.style.opacity = '0';
       iframe.style.pointerEvents = 'none';
       iframe.style.zIndex = '-9999';
@@ -82,7 +86,6 @@ export const convertHtmlToSvgLocal = async (
                 transition: none !important;
                 animation: none !important;
                 transition-property: none !important;
-                transform: none !important; /* Reset transforms that might hide content */
               }
               /* Try to reveal scroll-triggered fade-ins */
               [data-anim-tween], .fade-in, .reveal, .aos-animate {
@@ -213,8 +216,8 @@ export const convertHtmlToSvgLocal = async (
             // Re-measure after resize
             const rootRect = rootElement.getBoundingClientRect();
 
-            const svgWidth = Math.max(rootRect.width, 1440);
-            const svgHeight = Math.max(rootRect.height, fullHeight, 900);
+            const svgWidth = Math.max(rootRect.width, iframeW);
+            const svgHeight = Math.max(rootRect.height, fullHeight, 1);
 
             let svgElements = '';
             let defsContent = '';
@@ -477,41 +480,113 @@ export const convertHtmlToSvgLocal = async (
 
             // --- BORDER RADIUS HELPERS ---
 
-            /** Parse per-corner border-radius from computed style */
-            const parseBorderRadii = (style: CSSStyleDeclaration, w: number, h: number) => {
-              const parse = (val: string | undefined) => {
-                if (!val || val === '0px') return 0;
-                // "10px 5px" → take first value (horizontal radius)
-                const first = val.split(' ')[0];
-                if (first.endsWith('%')) {
-                  return parseFloat(first) / 100 * Math.min(w, h);
-                }
-                return parseFloat(first) || 0;
-              };
+            type CornerRadius = { x: number; y: number };
+            type BorderRadii = {
+              tl: CornerRadius;
+              tr: CornerRadius;
+              br: CornerRadius;
+              bl: CornerRadius;
+            };
+
+            const nearlyEqual = (a: number, b: number) => Math.abs(a - b) < 0.01;
+
+            const getVisualScale = (el: HTMLElement, rect: DOMRect = el.getBoundingClientRect()) => {
+              const computed = iframeWin.getComputedStyle(el);
+              const layoutW = el.offsetWidth || parseFloat(computed.width) || rect.width;
+              const layoutH = el.offsetHeight || parseFloat(computed.height) || rect.height;
               return {
-                tl: parse(style.borderTopLeftRadius),
-                tr: parse(style.borderTopRightRadius),
-                br: parse(style.borderBottomRightRadius),
-                bl: parse(style.borderBottomLeftRadius),
+                x: layoutW > 0 ? rect.width / layoutW : 1,
+                y: layoutH > 0 ? rect.height / layoutH : 1,
               };
+            };
+
+            const scaleCssPx = (value: string, scale: number) => {
+              const num = parseFloat(value);
+              if (!Number.isFinite(num) || !value.trim().endsWith('px')) return value;
+              return `${num * scale}px`;
+            };
+
+            const hasAnyRadius = (radii: BorderRadii) => {
+              return radii.tl.x > 0 || radii.tl.y > 0
+                || radii.tr.x > 0 || radii.tr.y > 0
+                || radii.br.x > 0 || radii.br.y > 0
+                || radii.bl.x > 0 || radii.bl.y > 0;
+            };
+
+            const hasUniformRadii = (radii: BorderRadii) => {
+              const { tl, tr, br, bl } = radii;
+              return nearlyEqual(tl.x, tr.x) && nearlyEqual(tr.x, br.x) && nearlyEqual(br.x, bl.x)
+                && nearlyEqual(tl.y, tr.y) && nearlyEqual(tr.y, br.y) && nearlyEqual(br.y, bl.y);
+            };
+
+            /** Parse per-corner border-radius from computed style */
+            const parseBorderRadii = (
+              style: CSSStyleDeclaration,
+              w: number,
+              h: number,
+              scaleX = 1,
+              scaleY = 1,
+            ): BorderRadii => {
+              const parsePart = (part: string | undefined, size: number, scale: number) => {
+                if (!part || part === '0' || part === '0px') return 0;
+                if (part.endsWith('%')) {
+                  return parseFloat(part) / 100 * size;
+                }
+                return (parseFloat(part) || 0) * scale;
+              };
+
+              const parseCorner = (val: string | undefined): CornerRadius => {
+                if (!val) return { x: 0, y: 0 };
+                const parts = val.trim().split(/\s+/);
+                const x = parsePart(parts[0], w, scaleX);
+                const y = parsePart(parts[1] || parts[0], h, scaleY);
+                return { x, y };
+              };
+
+              const radii = {
+                tl: parseCorner(style.borderTopLeftRadius),
+                tr: parseCorner(style.borderTopRightRadius),
+                br: parseCorner(style.borderBottomRightRadius),
+                bl: parseCorner(style.borderBottomLeftRadius),
+              };
+
+              // CSS scales all corner radii down together when adjacent radii
+              // would exceed the box size. Mirror that before emitting SVG.
+              const scale = Math.min(
+                1,
+                w / Math.max(radii.tl.x + radii.tr.x, 1),
+                w / Math.max(radii.bl.x + radii.br.x, 1),
+                h / Math.max(radii.tl.y + radii.bl.y, 1),
+                h / Math.max(radii.tr.y + radii.br.y, 1),
+              );
+
+              if (scale < 1) {
+                Object.values(radii).forEach((corner) => {
+                  corner.x *= scale;
+                  corner.y *= scale;
+                });
+              }
+
+              return radii;
             };
 
             /** Generate SVG path data for a rectangle with per-corner radii */
             const roundedRectPath = (px: number, py: number, pw: number, ph: number,
-              tl: number, tr: number, br: number, bl: number): string => {
-              const maxR = Math.min(pw, ph) / 2;
-              tl = Math.min(tl, maxR); tr = Math.min(tr, maxR);
-              br = Math.min(br, maxR); bl = Math.min(bl, maxR);
+              radii: BorderRadii): string => {
+              const { tl, tr, br, bl } = radii;
+              const arc = (r: CornerRadius, x: number, y: number) => {
+                return r.x > 0 && r.y > 0 ? `A${r.x},${r.y} 0 0 1 ${x},${y}` : `L${x},${y}`;
+              };
               return [
-                `M${px + tl},${py}`,
-                `H${px + pw - tr}`,
-                tr > 0 ? `A${tr},${tr} 0 0 1 ${px + pw},${py + tr}` : `L${px + pw},${py}`,
-                `V${py + ph - br}`,
-                br > 0 ? `A${br},${br} 0 0 1 ${px + pw - br},${py + ph}` : `L${px + pw},${py + ph}`,
-                `H${px + bl}`,
-                bl > 0 ? `A${bl},${bl} 0 0 1 ${px},${py + ph - bl}` : `L${px},${py + ph}`,
-                `V${py + tl}`,
-                tl > 0 ? `A${tl},${tl} 0 0 1 ${px + tl},${py}` : `L${px},${py}`,
+                `M${px + tl.x},${py}`,
+                `H${px + pw - tr.x}`,
+                arc(tr, px + pw, py + tr.y),
+                `V${py + ph - br.y}`,
+                arc(br, px + pw - br.x, py + ph),
+                `H${px + bl.x}`,
+                arc(bl, px, py + ph - bl.y),
+                `V${py + tl.y}`,
+                arc(tl, px + tl.x, py),
                 'Z'
               ].join(' ');
             };
@@ -519,15 +594,19 @@ export const convertHtmlToSvgLocal = async (
             /** Render the correct SVG shape for an element based on its border-radius */
             const renderShape = (
               sx: number, sy: number, sw: number, sh: number,
-              radii: { tl: number; tr: number; br: number; bl: number },
+              radii: BorderRadii,
               fillAttr: string, strokeAttr: string, filterAttr: string, opacityAttr: string
             ): string => {
               const { tl, tr, br, bl } = radii;
-              const allEqual = tl === tr && tr === br && br === bl;
+              const allEqual = hasUniformRadii(radii);
               const minDim = Math.min(sw, sh);
-              const isFullyRound = allEqual && tl >= minDim / 2;
+              const isFullyRound = allEqual && tl.x >= minDim / 2 && tl.y >= minDim / 2;
 
-              if (isFullyRound && Math.abs(sw - sh) < 1) {
+              if (!hasAnyRadius(radii)) {
+                return `<rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" ${fillAttr} ${strokeAttr} ${filterAttr} ${opacityAttr} />\n`;
+              }
+
+              if (isFullyRound && Math.abs(sw - sh) < 1 && nearlyEqual(tl.x, tl.y)) {
                 // Perfect square with full radius → circle
                 const cx = sx + sw / 2;
                 const cy = sy + sh / 2;
@@ -538,65 +617,78 @@ export const convertHtmlToSvgLocal = async (
                 // Pill / capsule shape → rounded rect with rx = half the shorter side
                 // (NOT an ellipse — that would distort the shape into an oval)
                 const rx = minDim / 2;
-                return `<rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" rx="${rx}" ${fillAttr} ${strokeAttr} ${filterAttr} ${opacityAttr} />\n`;
+                return `<rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" rx="${rx}" ry="${rx}" ${fillAttr} ${strokeAttr} ${filterAttr} ${opacityAttr} />\n`;
               }
               if (allEqual) {
                 // Uniform rounded rect
-                return `<rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" rx="${tl}" ${fillAttr} ${strokeAttr} ${filterAttr} ${opacityAttr} />\n`;
+                return `<rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" rx="${tl.x}" ry="${tl.y}" ${fillAttr} ${strokeAttr} ${filterAttr} ${opacityAttr} />\n`;
               }
               // Per-corner rounded rect
-              const d = roundedRectPath(sx, sy, sw, sh, tl, tr, br, bl);
+              const d = roundedRectPath(sx, sy, sw, sh, radii);
               return `<path d="${d}" ${fillAttr} ${strokeAttr} ${filterAttr} ${opacityAttr} />\n`;
             };
 
             /** Create a clipPath definition matching an element's shape (with border-radius) */
             const createShapeClip = (
               clipId: string, cx: number, cy: number, cw: number, ch: number,
-              radii: { tl: number; tr: number; br: number; bl: number }
+              radii: BorderRadii
             ): string => {
               const { tl, tr, br, bl } = radii;
-              const allEqual = tl === tr && tr === br && br === bl;
-              if (allEqual && tl === 0) {
+              const allEqual = hasUniformRadii(radii);
+              if (!hasAnyRadius(radii)) {
                 return `<clipPath id="${clipId}"><rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" /></clipPath>`;
               }
               if (allEqual) {
-                return `<clipPath id="${clipId}"><rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" rx="${tl}" /></clipPath>`;
+                return `<clipPath id="${clipId}"><rect x="${cx}" y="${cy}" width="${cw}" height="${ch}" rx="${tl.x}" ry="${tl.y}" /></clipPath>`;
               }
-              const d = roundedRectPath(cx, cy, cw, ch, tl, tr, br, bl);
+              const d = roundedRectPath(cx, cy, cw, ch, radii);
               return `<clipPath id="${clipId}"><path d="${d}" /></clipPath>`;
             };
 
-            // --- STRUCTURED SVG: Element Naming for Figma Layers ---
-            const UTILITY_CLASS_PREFIXES = [
-              'flex', 'block', 'inline', 'grid', 'hidden', 'visible', 'relative', 'absolute',
-              'fixed', 'sticky', 'overflow', 'z-', 'cursor-', 'transition', 'transform',
-              'animate', 'duration', 'ease', 'delay', 'will-change',
-              'p-', 'px-', 'py-', 'pt-', 'pr-', 'pb-', 'pl-', 'm-', 'mx-', 'my-',
-              'mt-', 'mr-', 'mb-', 'ml-', 'w-', 'h-', 'min-w-', 'min-h-', 'max-w-', 'max-h-',
-              'bg-', 'text-xs', 'text-sm', 'text-base', 'text-lg', 'text-xl', 'text-2xl',
-              'text-3xl', 'text-4xl', 'text-5xl', 'font-', 'leading-', 'tracking-',
-              'rounded', 'border', 'shadow', 'opacity-', 'ring-',
-              'gap-', 'space-', 'divide-', 'place-', 'items-', 'justify-', 'self-',
-              'col-', 'row-', 'order-', 'grow', 'shrink', 'basis-',
-              'top-', 'right-', 'bottom-', 'left-', 'inset-',
-              'sr-only', 'not-sr-only', 'antialiased', 'subpixel-antialiased',
-              'object-', 'aspect-', 'float-', 'clear-',
-            ];
+            const hasActualOverflow = (el: HTMLElement, rect: DOMRect, style: CSSStyleDeclaration, radii: BorderRadii) => {
+              const clipsOverflow = style.overflow === 'hidden' || style.overflow === 'clip'
+                || style.overflowX === 'hidden' || style.overflowY === 'hidden'
+                || style.overflowX === 'clip' || style.overflowY === 'clip';
+              if (!clipsOverflow || rect.width <= 0 || rect.height <= 0) return false;
 
-            /** Generate a meaningful name for an SVG group from a DOM element */
-            const getElementName = (el: HTMLElement): string => {
-              // Priority 1: element id
-              if (el.id) return el.id;
-              // Priority 2: first meaningful CSS class
-              if (typeof el.className === 'string' && el.className) {
-                const classes = el.className.split(/\s+/).filter(c => c.length > 0);
-                for (const cls of classes) {
-                  const isUtility = UTILITY_CLASS_PREFIXES.some(prefix => cls.startsWith(prefix));
-                  if (!isUtility && cls.length > 1) return cls;
+              const childElements = Array.from(el.children);
+
+              // border-radius + overflow hidden clips child painting at the corners even
+              // when children are still inside the rectangular bounding box.
+              if (hasAnyRadius(radii)) {
+                for (const child of childElements) {
+                  const childStyle = iframeWin.getComputedStyle(child);
+                  if (childStyle.display === 'none' || childStyle.visibility === 'hidden') continue;
+                  const childRect = child.getBoundingClientRect();
+                  const touchesTopLeft = childRect.left < rect.left + radii.tl.x && childRect.top < rect.top + radii.tl.y;
+                  const touchesTopRight = childRect.right > rect.right - radii.tr.x && childRect.top < rect.top + radii.tr.y;
+                  const touchesBottomRight = childRect.right > rect.right - radii.br.x && childRect.bottom > rect.bottom - radii.br.y;
+                  const touchesBottomLeft = childRect.left < rect.left + radii.bl.x && childRect.bottom > rect.bottom - radii.bl.y;
+                  if (touchesTopLeft || touchesTopRight || touchesBottomRight || touchesBottomLeft) {
+                    return true;
+                  }
                 }
               }
-              // Priority 3: tag name
-              return el.tagName.toLowerCase();
+
+              if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) {
+                return true;
+              }
+
+              for (const child of childElements) {
+                const childStyle = iframeWin.getComputedStyle(child);
+                if (childStyle.display === 'none' || childStyle.visibility === 'hidden') continue;
+                const childRect = child.getBoundingClientRect();
+                if (
+                  childRect.left < rect.left - 1
+                  || childRect.top < rect.top - 1
+                  || childRect.right > rect.right + 1
+                  || childRect.bottom > rect.bottom + 1
+                ) {
+                  return true;
+                }
+              }
+
+              return false;
             };
 
             const walk = async (node: Node) => {
@@ -611,6 +703,7 @@ export const convertHtmlToSvgLocal = async (
                 const y = rect.top - rootRect.top;
                 const w = rect.width;
                 const h = rect.height;
+                const visualScale = getVisualScale(el, rect);
 
                 // Skip non-visual elements entirely
                 const tag = el.tagName.toUpperCase();
@@ -623,15 +716,6 @@ export const convertHtmlToSvgLocal = async (
                 const isHidden = style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0;
                 if (isHidden) return;
 
-                // --- STRUCTURED SVG: Open named group for this element ---
-                const groupName = getElementName(el);
-                const safeGroupName = escapeXml(groupName);
-                // XML ids must start with a letter
-                let sanitized = groupName.replace(/[^a-zA-Z0-9_-]/g, '_');
-                if (!/^[a-zA-Z]/.test(sanitized)) sanitized = 'e' + sanitized;
-                const safeGroupId = getUniqueId(sanitized);
-                svgElements += `<g id="${safeGroupId}" data-name="${safeGroupName}">\n`;
-
                 // --- RASTERIZATION DISABLED ---
                 // The foreignObject snapshot approach causes CORS errors with external resources.
                 // Falling back to vector text rendering with robust font fallbacks.
@@ -643,7 +727,6 @@ export const convertHtmlToSvgLocal = async (
                   if (dataUrl && w > 0 && h > 0) {
                     svgElements += `<image href="${dataUrl}" x="${x}" y="${y}" width="${w}" height="${h}" />\n`;
                   }
-                  svgElements += `</g>\n`;
                   return;
                 }
 
@@ -654,7 +737,6 @@ export const convertHtmlToSvgLocal = async (
                   if (inlineSvg && w > 0 && h > 0) {
                     svgElements += `${inlineSvg}\n`;
                   }
-                  svgElements += `</g>\n`;
                   return;
                 }
 
@@ -664,8 +746,8 @@ export const convertHtmlToSvgLocal = async (
                   let src = img.currentSrc || img.src;
                   if (src) {
                     src = toAbsoluteUrl(src);
-                    const imgRadii = parseBorderRadii(style, w, h);
-                    const hasRadius = imgRadii.tl > 0 || imgRadii.tr > 0 || imgRadii.br > 0 || imgRadii.bl > 0;
+                    const imgRadii = parseBorderRadii(style, w, h, visualScale.x, visualScale.y);
+                    const hasRadius = hasAnyRadius(imgRadii);
 
                     let clipAttr = '';
                     if (hasRadius) {
@@ -678,12 +760,11 @@ export const convertHtmlToSvgLocal = async (
 
                     // Border overlay
                     const imgBorderColor = parseColor(style.borderColor);
-                    const imgBorderWidth = parseFloat(style.borderWidth);
+                    const imgBorderWidth = parseFloat(style.borderWidth) * ((visualScale.x + visualScale.y) / 2);
                     if (imgBorderColor && imgBorderWidth > 0) {
                       svgElements += renderShape(x, y, w, h, imgRadii, 'fill="none"', `stroke="${imgBorderColor}" stroke-width="${imgBorderWidth}"`, '', '');
                     }
                   }
-                  svgElements += `</g>\n`;
                   return;
                 }
 
@@ -715,18 +796,22 @@ export const convertHtmlToSvgLocal = async (
                 // --- IMPROVED RENDERING: Backgrounds, Borders, Overflow ---
                 const fill = processBackground(style);
                 const shadowFilter = processShadow(style);
-                const radii = parseBorderRadii(style, w, h);
+                const radii = parseBorderRadii(style, w, h, visualScale.x, visualScale.y);
 
                 // Per-side borders
                 const borders = {
-                  top:    { w: parseFloat(style.borderTopWidth || '0'),    c: parseColor(style.borderTopColor) },
-                  right:  { w: parseFloat(style.borderRightWidth || '0'),  c: parseColor(style.borderRightColor) },
-                  bottom: { w: parseFloat(style.borderBottomWidth || '0'), c: parseColor(style.borderBottomColor) },
-                  left:   { w: parseFloat(style.borderLeftWidth || '0'),   c: parseColor(style.borderLeftColor) },
+                  top:    { w: parseFloat(style.borderTopWidth || '0') * visualScale.y,    c: parseColor(style.borderTopColor) },
+                  right:  { w: parseFloat(style.borderRightWidth || '0') * visualScale.x,  c: parseColor(style.borderRightColor) },
+                  bottom: { w: parseFloat(style.borderBottomWidth || '0') * visualScale.y, c: parseColor(style.borderBottomColor) },
+                  left:   { w: parseFloat(style.borderLeftWidth || '0') * visualScale.x,   c: parseColor(style.borderLeftColor) },
                 };
-                const allBordersEqual = borders.top.w === borders.right.w && borders.right.w === borders.bottom.w && borders.bottom.w === borders.left.w
-                  && borders.top.c === borders.right.c && borders.right.c === borders.bottom.c && borders.bottom.c === borders.left.c;
-                const hasUniformBorder = allBordersEqual && borders.top.w > 0 && borders.top.c;
+                const sameBorderWidth = nearlyEqual(borders.top.w, borders.right.w)
+                  && nearlyEqual(borders.right.w, borders.bottom.w)
+                  && nearlyEqual(borders.bottom.w, borders.left.w);
+                const sameBorderColor = borders.top.c === borders.right.c
+                  && borders.right.c === borders.bottom.c
+                  && borders.bottom.c === borders.left.c;
+                const hasUniformBorder = sameBorderWidth && sameBorderColor && borders.top.w > 0 && borders.top.c;
                 const hasAnyBorder = borders.top.w > 0 || borders.right.w > 0 || borders.bottom.w > 0 || borders.left.w > 0;
 
                 // Background image url(...) support
@@ -742,36 +827,49 @@ export const convertHtmlToSvgLocal = async (
                 // Render element shape (fill + uniform border + shadow)
                 if ((fill || hasUniformBorder || shadowFilter || bgImageUrl) && w > 0 && h > 0) {
                   const fillAttr = fill ? `fill="${fill}"` : 'fill="none"';
-                  const strokeAttr = hasUniformBorder ? `stroke="${borders.top.c}" stroke-width="${borders.top.w}"` : '';
+                  const uniformStrokeWidth = (borders.top.w + borders.right.w + borders.bottom.w + borders.left.w) / 4;
+                  const strokeAttr = hasUniformBorder ? `stroke="${borders.top.c}" stroke-width="${uniformStrokeWidth}"` : '';
                   const filterAttr = shadowFilter || '';
                   svgElements += renderShape(x, y, w, h, radii, fillAttr, strokeAttr, filterAttr, opacityAttr);
                 }
 
                 // Background image (rendered after fill, clipped to element shape)
                 if (bgImageUrl && w > 0 && h > 0) {
-                  const imgClipId = getUniqueId('bg-clip');
-                  defsContent += createShapeClip(imgClipId, x, y, w, h, radii);
-                  svgElements += `<image href="${bgImageUrl}" x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${imgClipId})" />\n`;
+                  const hasRadius = hasAnyRadius(radii);
+                  if (hasRadius) {
+                    const imgClipId = getUniqueId('bg-clip');
+                    defsContent += createShapeClip(imgClipId, x, y, w, h, radii);
+                    svgElements += `<image href="${bgImageUrl}" x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${imgClipId})" />\n`;
+                  } else {
+                    svgElements += `<image href="${bgImageUrl}" x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice" />\n`;
+                  }
                 }
 
                 // Per-side borders (when sides differ)
                 if (hasAnyBorder && !hasUniformBorder && w > 0 && h > 0) {
-                  if (borders.top.w > 0 && borders.top.c)
-                    svgElements += `<line x1="${x}" y1="${y}" x2="${x + w}" y2="${y}" stroke="${borders.top.c}" stroke-width="${borders.top.w}" />\n`;
-                  if (borders.right.w > 0 && borders.right.c)
-                    svgElements += `<line x1="${x + w}" y1="${y}" x2="${x + w}" y2="${y + h}" stroke="${borders.right.c}" stroke-width="${borders.right.w}" />\n`;
-                  if (borders.bottom.w > 0 && borders.bottom.c)
-                    svgElements += `<line x1="${x}" y1="${y + h}" x2="${x + w}" y2="${y + h}" stroke="${borders.bottom.c}" stroke-width="${borders.bottom.w}" />\n`;
-                  if (borders.left.w > 0 && borders.left.c)
-                    svgElements += `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + h}" stroke="${borders.left.c}" stroke-width="${borders.left.w}" />\n`;
+                  if (hasAnyRadius(radii)) {
+                    const visibleBorders = [borders.top, borders.right, borders.bottom, borders.left].filter(border => border.w > 0 && border.c);
+                    const strokeColor = visibleBorders[0]?.c;
+                    const strokeWidth = visibleBorders.reduce((sum, border) => sum + border.w, 0) / Math.max(visibleBorders.length, 1);
+                    if (strokeColor && strokeWidth > 0) {
+                      svgElements += renderShape(x, y, w, h, radii, 'fill="none"', `stroke="${strokeColor}" stroke-width="${strokeWidth}"`, '', opacityAttr);
+                    }
+                  } else {
+                    if (borders.top.w > 0 && borders.top.c)
+                      svgElements += `<line x1="${x}" y1="${y}" x2="${x + w}" y2="${y}" stroke="${borders.top.c}" stroke-width="${borders.top.w}" />\n`;
+                    if (borders.right.w > 0 && borders.right.c)
+                      svgElements += `<line x1="${x + w}" y1="${y}" x2="${x + w}" y2="${y + h}" stroke="${borders.right.c}" stroke-width="${borders.right.w}" />\n`;
+                    if (borders.bottom.w > 0 && borders.bottom.c)
+                      svgElements += `<line x1="${x}" y1="${y + h}" x2="${x + w}" y2="${y + h}" stroke="${borders.bottom.c}" stroke-width="${borders.bottom.w}" />\n`;
+                    if (borders.left.w > 0 && borders.left.c)
+                      svgElements += `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + h}" stroke="${borders.left.c}" stroke-width="${borders.left.w}" />\n`;
+                  }
                 }
 
-                // Overflow clipping: wrap children in <g clip-path> if overflow is hidden.
-                // This keeps the legacy vector renderer stable for Figma-oriented exports.
-                const overflowVal = style.overflow;
-                const hasOverflowClip = (overflowVal === 'hidden' || overflowVal === 'clip'
-                  || style.overflowX === 'hidden' || style.overflowY === 'hidden'
-                  || style.overflowX === 'clip' || style.overflowY === 'clip') && w > 0 && h > 0;
+                // Only create a clipPath when hidden/clip overflow is actually clipping content.
+                // CSS frameworks put overflow-hidden on many elements where it changes nothing;
+                // exporting all of those as SVG clips creates a sea of Figma masks.
+                const hasOverflowClip = hasActualOverflow(el, rect, style, radii);
 
                 if (hasOverflowClip) {
                   const overflowClipId = getUniqueId('ov-clip');
@@ -787,9 +885,6 @@ export const convertHtmlToSvgLocal = async (
                   svgElements += `</g>\n`;
                 }
 
-                // Close the named group for this element
-                svgElements += `</g>\n`;
-
               } else if (node.nodeType === Node.TEXT_NODE) {
                 const originalText = node.textContent?.trim();
                 if (!originalText || !node.parentElement) {
@@ -802,6 +897,8 @@ export const convertHtmlToSvgLocal = async (
 
                 const parentStyle = iframeWin.getComputedStyle(node.parentElement);
                 const parentOpacity = parseFloat(parentStyle.opacity);
+                const parentRect = node.parentElement.getBoundingClientRect();
+                const textScale = getVisualScale(node.parentElement, parentRect);
 
                 // Allow text if it was forced visible or is visible
                 const isVisible = parentStyle.display !== 'none' && parentStyle.visibility !== 'hidden' && parentOpacity > 0;
@@ -819,10 +916,10 @@ export const convertHtmlToSvgLocal = async (
                 // VECTOR TEXT MODE (Rasterization disabled - CORS issue)
                 if (textRect.width > 0 && textRect.height > 0) {
                   const color = parentStyle.color;
-                  const fontSize = parentStyle.fontSize;
+                  const fontSize = scaleCssPx(parentStyle.fontSize, textScale.y);
                   const fontWeight = parentStyle.fontWeight;
                   const fontStyle = parentStyle.fontStyle !== 'normal' ? `font-style="${parentStyle.fontStyle}"` : '';
-                  const letterSpacing = parentStyle.letterSpacing !== 'normal' ? `letter-spacing="${parentStyle.letterSpacing}"` : '';
+                  const letterSpacing = parentStyle.letterSpacing !== 'normal' ? `letter-spacing="${scaleCssPx(parentStyle.letterSpacing, textScale.x)}"` : '';
                   const textDecoration = parentStyle.textDecorationLine !== 'none' ? `text-decoration="${parentStyle.textDecorationLine}"` : '';
                   const opacity = parentOpacity !== 1 ? `opacity="${parentOpacity}"` : '';
 

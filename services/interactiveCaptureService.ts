@@ -112,10 +112,10 @@ export function createInteractiveCapture(
     const iframe = document.createElement('iframe');
     iframe.style.width = viewportW + 'px';
     iframe.style.height = viewportH + 'px';
-    iframe.style.maxWidth = '100%';
     iframe.style.border = 'none';
     iframe.style.background = '#fff';
     iframe.style.flexShrink = '0';
+    iframe.style.overflow = 'hidden';
     // No sandbox — we load from our own proxy, sandbox can block
     // same-origin DOM access after page navigations/redirects.
     iframe.setAttribute('width', String(viewportW));
@@ -179,7 +179,7 @@ export function createInteractiveCapture(
             const proxyPrefix = baseUrl || '';
             const currentHtml = freezeCapturedHtml(html, proxyPrefix);
             const currentBaseUrl = getDocumentBaseUrl(currentUrl, baseUrl);
-            let svg = await convertHtmlToSvgLocal(currentHtml, false, currentBaseUrl, false, undefined, false);
+            let svg = await convertHtmlToSvgLocal(currentHtml, false, currentBaseUrl, false, undefined, false, viewportW, viewportH);
             if (isSvgLikelyBlank(svg) && capturedHtmlHasVisibleContent(currentHtml)) {
                 svg = await convertUrlToSvgWithForeignObject(
                     currentHtml,
