@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Figma 文字复制验证</title></head>
+<body style="font-family:'PingFang SC',sans-serif;padding:24px">
+  <div id="sample" style="display:flex;flex-direction:column;gap:16px;padding:24px;width:400px;box-sizing:border-box;min-width:240px;text-align:center;line-height:1.5;background:#eef2ff;border-radius:16px;font:16px sans-serif;color:#172554">
+    <h2 style="margin:0;font-size:24px;font-weight:500;line-height:1.5">自动布局 / Auto layout</h2>
+    <p style="margin:0">可编辑文字 Editable text</p>
+    <div id="actions" style="display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:12px;width:100%">
+      <button style="display:flex;flex:1 1 144px;min-width:144px;align-items:center;justify-content:center;gap:8px;padding:12px 20px;background:#4f46e5;color:white;border:0;border-radius:8px;font:inherit"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><use href="sprite.svg#search"/></svg><span style="flex:1;min-width:0;text-align:center">确认 Confirm</span></button>
+      <button style="display:flex;flex:1 1 144px;min-width:144px;align-items:center;justify-content:center;gap:8px;padding:12px 20px;background:white;border:1px solid #c7d2fe;border-radius:8px;font:inherit"><span style="flex:1;min-width:0;text-align:center">取消 Cancel</span></button>
+    </div>
+  </div>
+  <button id="verify" style="margin-top:24px">验证原生字体数据</button>
+  <button id="copy" disabled>复制 Figma 测试内容</button>
+  <pre id="result" role="status">等待验证</pre>
+  <script type="module">
+    import { prepareFigmaClipboard, copyFigmaToClipboard } from '/services/figmaClipboardService.ts';
+    import { parseClipboardHtml, decodeFigmaData } from '@figit/fig-kiwi';
+    let payload, source;
+    document.querySelector('#verify').onclick = async () => {
+      const status = document.querySelector('#result');
+      status.textContent = '正在生成…';
+      try {
+        source = {
+          html: '<!DOCTYPE html><html><body style="margin:0">' + document.querySelector('#sample').outerHTML + '</body></html>',
+          baseUrl: location.href, width: 600, height: 360,
+        };
+        payload = await prepareFigmaClipboard(source, 'PingFang SC 复制验证');
+        const decoded = decodeFigmaData(parseClipboardHtml(payload).fig);
+        const nodes = decoded.message.nodeChanges;
+        const texts = nodes.filter(node => node.type === 'TEXT');
+        const expected = ['自动布局 / Auto layout', '可编辑文字 Editable text', '确认 Confirm', '取消 Cancel'];
+        if (expected.some(text => !texts.some(node => (node.characters || node.textData?.characters) === text))) throw new Error('文字内容缺失');
+        if (texts.some(node => node.fontName.family !== 'PingFang SC')) throw new Error('字体名称错误');
+        if (!nodes.some(node => node.stackMode === 'HORIZONTAL') || !nodes.some(node => node.stackMode === 'VERTICAL')) throw new Error('自动布局缺失');
+        if (!nodes.some(node => node.type === 'VECTOR')) throw new Error('外部 sprite 图标丢失');
+        if (texts.filter(node => /Confirm|Cancel/.test(node.textData.characters)).some(node => node.textAlignVertical !== 'CENTER')) throw new Error('按钮文字未垂直居中');
+        const buttons = nodes.filter(node => node.type === 'FRAME' && node.name.startsWith('Button /'));
+        if (buttons.length !== 2 || buttons.some(node => node.stackMode !== 'HORIZONTAL' || node.stackChildPrimaryGrow !== 1 || node.stackCounterSizing !== 'RESIZE_TO_FIT')) throw new Error('按钮不是横向 Fill / Hug 自动布局');
+        const actions = nodes.find(node => node.name === 'actions');
+        if (actions.stackMode !== 'HORIZONTAL' || actions.stackSpacing !== 12 || actions.stackChildAlignSelf !== 'STRETCH') throw new Error('按钮行 Gap/Fill 配置错误');
+        const sample = nodes.find(node => node.name.endsWith('/ sample'));
+        if (sample.stackMode !== 'VERTICAL' || sample.stackSpacing !== 16 || sample.stackHorizontalPadding !== 24 || sample.stackVerticalPadding !== 24) throw new Error('父容器方向或 Padding 配置错误');
+        if (nodes.filter(node => node.type === 'FRAME' && node.stackMode === 'NONE').some(node => !node.frameMaskDisabled)) throw new Error('图标几何容器仍然裁剪描边');
+        if (actions.stackWrap !== 'WRAP') throw new Error('按钮行缺少自适应换行');
+        const icon = nodes.find(node => node.type === 'FRAME' && node.parentIndex?.guid.localID === buttons[0].guid.localID);
+        const label = texts.find(node => node.textData.characters === '确认 Confirm');
+        if (!icon || icon.parentIndex.position >= label.parentIndex.position) throw new Error('图标与文字顺序错误');
+        if (texts.some(node => !['WIDTH_AND_HEIGHT','HEIGHT'].includes(node.textAutoResize))) throw new Error('文字不支持内容自适应');
+        status.textContent = JSON.stringify({
+          passed: true, nativeTextNodes: texts.length,
+          text: texts.map(node => node.characters || node.textData?.characters),
+          fonts: texts.map(node => node.fontName),
+          autoLayoutChecks: {buttonsFillAndHug: true, rowFill: true, gap: actions.stackSpacing, padding: sample.stackHorizontalPadding, textResizing: texts.map(node => node.textAutoResize)},
+          vectorNodes: nodes.filter(node => node.type === "VECTOR").length,
+          centeredButtons: texts.filter(node => /Confirm|Cancel/.test(node.textData.characters)).map(node => node.textAlignVertical),
+          autoLayouts: nodes.filter(node => node.stackMode && node.stackMode !== 'NONE').map(node => node.stackMode),
+        }, null, 2);
+        document.querySelector('#copy').disabled = false;
+      } catch (error) { status.textContent = 'FAIL: ' + error.message; }
+    };
+    document.querySelector('#copy').onclick = async () => {
+      await copyFigmaToClipboard(source, 'PingFang SC 复制验证');
+      document.querySelector('#result').textContent += '\n已复制，可以在 Figma 粘贴';
+    };
+  </script>
+</body></html>

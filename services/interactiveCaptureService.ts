@@ -9,16 +9,20 @@
 
 import { convertHtmlToSvgLocal } from './localService';
 import { convertUrlToSvgWithForeignObject } from './urlScreenshotService';
+import { selectCaptureDocument, serializeCaptureDocument } from './captureSnapshot';
+import type { FigmaCopySource } from '../types';
 
 export interface InteractiveCaptureResult {
     svg: string;
     url: string;
+    figmaSource: FigmaCopySource;
 }
 
 export interface InteractiveCaptureHandle {
     iframe: HTMLIFrameElement;
     capture: () => Promise<InteractiveCaptureResult>;
     getCurrentUrl: () => string;
+    resize: (width: number, height: number) => void;
     destroy: () => void;
 }
 
@@ -32,7 +36,7 @@ function freezeCapturedHtml(html: string, proxyPrefix?: string): string {
         doc.querySelectorAll('[src], [href]').forEach((el) => {
             const src = el.getAttribute('src');
             const href = el.getAttribute('href');
-            if (src && src.startsWith('/') && !src.startsWith('//')) {
+            if (src && src.startsWith('/') && !src.startsWith('//') && !src.startsWith(proxyPrefix)) {
                 el.setAttribute('src', proxyPrefix.replace(/\/$/, '') + src);
             }
             if (href && href.startsWith('/') && !href.startsWith('//') && !href.startsWith(proxyPrefix)) {
@@ -180,6 +184,9 @@ export function createInteractiveCapture(
             const currentHtml = freezeCapturedHtml(html, proxyPrefix);
             const currentBaseUrl = getDocumentBaseUrl(currentUrl, baseUrl);
             let svg = await convertHtmlToSvgLocal(currentHtml, false, currentBaseUrl, false, undefined, false, viewportW, viewportH);
+            if (isSvgLikelyBlank(svg) && !capturedHtmlHasVisibleContent(currentHtml)) {
+                throw new Error('未捕获到页面内容，生成结果只有背景。请确认内嵌页面已加载完成后重试。');
+            }
             if (isSvgLikelyBlank(svg) && capturedHtmlHasVisibleContent(currentHtml)) {
                 svg = await convertUrlToSvgWithForeignObject(
                     currentHtml,
@@ -188,7 +195,13 @@ export function createInteractiveCapture(
                     Math.max(viewportH, 2400)
                 );
             }
-            return { svg, url: currentUrl };
+            return {
+                svg, url: currentUrl,
+                figmaSource: {
+                    html: currentHtml, baseUrl: currentBaseUrl || window.location.origin,
+                    width: viewportW, height: viewportH,
+                },
+            };
         };
 
         const captureDirectlyFromIframe = async (): Promise<InteractiveCaptureResult> => {
@@ -197,9 +210,8 @@ export function createInteractiveCapture(
                 throw new Error('无法直接读取当前 iframe DOM');
             }
 
-            const currentUrl = getCurrentUrl();
-            const html = `<!DOCTYPE html>\n${doc.documentElement.outerHTML}`;
-            return convertCapturedHtml(html, currentUrl);
+            const snapshot = serializeCaptureDocument(selectCaptureDocument(doc));
+            return convertCapturedHtml(snapshot.html, snapshot.url);
         };
 
         // Use postMessage to capture DOM — works even if the iframe navigated
@@ -247,5 +259,13 @@ export function createInteractiveCapture(
         if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
     };
 
-    return { iframe, capture, getCurrentUrl, destroy };
+    const resize = (width: number, height: number) => {
+        viewportW = width;
+        viewportH = height;
+        iframe.style.width = `${width}px`;
+        iframe.style.height = `${height}px`;
+        iframe.setAttribute('width', String(width));
+        iframe.setAttribute('height', String(height));
+    };
+    return { iframe, capture, getCurrentUrl, resize, destroy };
 }

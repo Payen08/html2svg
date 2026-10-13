@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import test from 'node:test';
+import ts from 'typescript';
+import {encodeFigmaData,decodeFigmaData} from '@figit/fig-kiwi';
+const exports={};runInNewContext(ts.transpileModule(readFileSync(new URL('../services/figmaGridService.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports});
+test('two fractional CSS grid maps share native tracks and stay Fill rather than wrapping fixed cards',()=>{
+ const guid=id=>({sessionID:0,localID:id});
+ const element={namespaceURI:'http://www.w3.org/1999/xhtml',computedStyleMap:()=>new Map([['grid-template-columns','minmax(0px, 1fr) minmax(0px, 1fr)']])};
+ const root={querySelector:()=>element,ownerDocument:{defaultView:{getComputedStyle:()=>({display:'grid',gridTemplateColumns:'836px 836px',columnGap:'16px',rowGap:'16px'})}}};
+ const nodes=[{guid:guid(0),type:'DOCUMENT'},{guid:guid(1),type:'CANVAS',parentIndex:{guid:guid(0),position:'!'}},{guid:guid(2),type:'FRAME',name:'Maps',size:{x:1688,y:504},parentIndex:{guid:guid(1),position:'!'}},...[3,4].map(id=>({guid:guid(id),type:'FRAME',name:'Map',stackMode:'VERTICAL',parentIndex:{guid:guid(2),position:String(id)}}))];
+ const result={document:{nodeChanges:nodes,blobs:[]},trace:{entries:[{guid:guid(2),tag:'div',domPath:'.maps'}]}};exports.applyFigmaGridLayout(root,result);
+ const ns=decodeFigmaData(encodeFigmaData(result.document).figBytes).message.nodeChanges;const grid=ns.find(n=>n.name==='Maps');
+ assert.equal(grid.stackMode,'GRID');assert.equal(grid.stackWrap,'NO_WRAP');assert.equal(grid.gridColumnGap,16);assert.equal(grid.gridColumns.entries.length,2);
+ assert.ok(grid.gridColumnsSizing.entries.every(e=>e.trackSize.maxSizing.type==='FLEX'));assert.equal(grid.gridRowsSizing.entries[0].trackSize.maxSizing.type,'HUG');
+ const maps=ns.filter(n=>n.name==='Map');assert.deepEqual(maps[0].gridRowAnchor,maps[1].gridRowAnchor);assert.notDeepEqual(maps[0].gridColumnAnchor,maps[1].gridColumnAnchor);assert.ok(maps.every(n=>n.stackChildPrimaryGrow===1&&n.stackChildAlignSelf==='STRETCH'));
+});

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, Code, Github, Zap, Cpu, Settings2, Box, ArrowRightLeft, Upload, FileCode2, Globe, Link, FolderOpen, Plus, X, Layers, Loader2, CheckCircle, AlertCircle, Download, Maximize2 } from 'lucide-react';
+import { Sparkles, Code, Github, Zap, Cpu, Settings2, Box, ArrowRightLeft, Upload, FileCode2, Globe, Link, Plus, X, Layers, Loader2, CheckCircle, AlertCircle, Download, Maximize2 } from 'lucide-react';
 import { Button } from './components/Button';
 import { SvgPreview } from './components/SvgPreview';
 import { HtmlPreview } from './components/HtmlPreview';
@@ -9,7 +9,7 @@ import { exportToFigmaJSON } from './services/figmaExportService';
 import { fetchUrlContent } from './services/urlFetchService';
 import { convertUrlToSvgWithForeignObject } from './services/urlScreenshotService';
 import { createInteractiveCapture, InteractiveCaptureHandle } from './services/interactiveCaptureService';
-import { SAMPLE_HTML, SAMPLE_SVG, ConversionState, HtmlConversionState, ViewMode, ConversionMode, AppMode, InputMode, RenderMode, PageItem } from './types';
+import { SAMPLE_HTML, SAMPLE_SVG, ConversionState, HtmlConversionState, ViewMode, ConversionMode, AppMode, InputMode, RenderMode, PageItem, FigmaCopySource } from './types';
 
 function App() {
   // App Mode: HTML→SVG or SVG→HTML
@@ -18,12 +18,13 @@ function App() {
   // HTML→SVG state
   const [inputHtml, setInputHtml] = useState<string>(SAMPLE_HTML);
   const [inputUrl, setInputUrl] = useState<string>('');
-  const [inputMode, setInputMode] = useState<InputMode>(InputMode.HTML);
-  const [renderMode, setRenderMode] = useState<RenderMode>(RenderMode.BROWSER);
-  const [conversionMode, setConversionMode] = useState<ConversionMode>(ConversionMode.LOCAL);
+  const [inputMode, setInputMode] = useState<InputMode>(InputMode.URL);
+  const [renderMode, setRenderMode] = useState<RenderMode>(RenderMode.INTERACTIVE);
+  const [conversionMode] = useState<ConversionMode>(ConversionMode.LOCAL);
   const [optimize, setOptimize] = useState<boolean>(false);
   const [rasterizeText, setRasterizeText] = useState<boolean>(false); // New Option
   const [isUrlFetching, setIsUrlFetching] = useState<boolean>(false);
+  const [figmaSource, setFigmaSource] = useState<FigmaCopySource | null>(null);
   const [svgState, setSvgState] = useState<ConversionState>({
     isLoading: false,
     error: null,
@@ -42,9 +43,6 @@ function App() {
 
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.SPLIT);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const htmlFileInputRef = useRef<HTMLInputElement>(null);
-  // Store the directory path/base URL for local file resolution
-  const [localFileBaseUrl, setLocalFileBaseUrl] = useState<string>('');
 
   // Multi-page state
   const [pages, setPages] = useState<PageItem[]>([]);
@@ -64,7 +62,7 @@ function App() {
   const [isViewportCustom, setIsViewportCustom] = useState(false);
 
   // Resizable panel state
-  const [leftPanelRatio, setLeftPanelRatio] = useState(50); // percentage
+  const [leftPanelRatio, setLeftPanelRatio] = useState(22); // percentage
   const isDraggingDivider = useRef(false);
 
   // HTML→SVG conversion
@@ -101,12 +99,13 @@ function App() {
       }
 
       let svg = '';
+      let capturedSource: FigmaCopySource | undefined;
 
       if (conversionMode === ConversionMode.AI) {
         svg = await convertHtmlToSvg(htmlToConvert, optimize);
       } else {
         // LOCAL Mode logic
-        let effectiveBaseUrl = fetchedUrl || localFileBaseUrl || '';
+        let effectiveBaseUrl = fetchedUrl || '';
         let directUrl: string | undefined;
 
         // For localhost URLs in FIGMA mode, use our Vite proxy to eliminate
@@ -141,10 +140,14 @@ function App() {
           // Figma Compatible Mode (standard elements) - Best for Figma import
           // For localhost URLs, pass directUrl to load via iframe.src (SPA support)
           // For other cases, pass effectiveBaseUrl to resolve relative links via srcdoc
-          svg = await convertHtmlToSvgLocal(htmlToConvert, optimize, effectiveBaseUrl, rasterizeText, directUrl);
+          svg = await convertHtmlToSvgLocal(htmlToConvert, optimize, effectiveBaseUrl, rasterizeText, directUrl,
+            true, undefined, undefined, source => { capturedSource = source; });
         }
       }
 
+      setRenderMode(RenderMode.FIGMA);
+      setFigmaSource(capturedSource || null);
+      setActivePageId(null);
       setSvgState({
         isLoading: false,
         error: null,
@@ -184,7 +187,7 @@ function App() {
         setIsFigmaExporting(true);
       }
 
-      let effectiveBaseUrl = fetchedUrl || localFileBaseUrl || '';
+      let effectiveBaseUrl = fetchedUrl || '';
       let directUrl: string | undefined;
 
       // Proxy logic for localhost URLs (same as handleHtmlToSvg)
@@ -253,49 +256,6 @@ function App() {
         htmlContent: null,
         cssContent: null,
       });
-    }
-  };
-
-  // Handle HTML file upload for local files
-  const handleHtmlFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    // Accept .html and .htm files
-    if (!file.name.match(/\.html?$/i)) {
-      alert('请选择 .html 或 .htm 文件');
-      if (htmlFileInputRef.current) {
-        htmlFileInputRef.current.value = '';
-      }
-      return;
-    }
-
-    try {
-      const content = await file.text();
-      setInputHtml(content);
-
-      // Try to get the file's directory path for resolving relative resources
-      // Modern browsers may expose the path via webkitRelativePath
-      if ('webkitRelativePath' in file && file.webkitRelativePath) {
-        // File was selected via directory picker - we have the relative path
-        const dirPath = file.webkitRelativePath.substring(0, file.webkitRelativePath.lastIndexOf('/') + 1);
-        setLocalFileBaseUrl(dirPath || '');
-      } else {
-        // For single file pick, try to get the full path via File System Access API
-        // or use a file:// fallback if the browser supports it
-        setLocalFileBaseUrl('');
-      }
-
-      // Auto-switch to HTML input mode to show the content
-      setInputMode(InputMode.HTML);
-    } catch (err: any) {
-      console.error('Failed to read HTML file:', err);
-      alert('无法读取文件: ' + err.message);
-    }
-
-    // Reset input
-    if (htmlFileInputRef.current) {
-      htmlFileInputRef.current.value = '';
     }
   };
 
@@ -414,9 +374,11 @@ function App() {
         } catch { /* keep original URL if parsing fails */ }
 
         // Convert using local renderer (Figma mode)
-        const svg = await convertHtmlToSvgLocal(htmlToConvert, optimize, effectiveBaseUrl, rasterizeText, directUrl);
+        let capturedSource: FigmaCopySource | undefined;
+        const svg = await convertHtmlToSvgLocal(htmlToConvert, optimize, effectiveBaseUrl, rasterizeText, directUrl,
+          true, undefined, undefined, source => { capturedSource = source; });
 
-        setPages(prev => prev.map(p => p.id === page.id ? { ...p, svgContent: svg, isConverting: false } : p));
+        setPages(prev => prev.map(p => p.id === page.id ? { ...p, svgContent: svg, figmaSource: capturedSource, isConverting: false } : p));
       } catch (err: any) {
         setPages(prev => prev.map(p => p.id === page.id ? {
           ...p,
@@ -523,10 +485,29 @@ function App() {
     setViewportH(clampViewportSize(Number(value)));
   };
 
+  const fitInteractiveViewport = () => {
+    const handle = interactiveRef.current;
+    const container = interactiveContainerRef.current;
+    if (!handle || !container?.clientWidth) return;
+    const width = Number(handle.iframe.getAttribute('width')) || viewportW;
+    const scale = width > container.clientWidth ? Math.max(0.1, (container.clientWidth - 32) / width) : 1;
+    handle.iframe.style.transform = `scale(${scale})`;
+    handle.iframe.style.transformOrigin = 'top center';
+  };
+
+  const resizeInteractiveViewport = (width = viewportW, height = viewportH) => {
+    const w = clampViewportSize(width);
+    const h = clampViewportSize(height);
+    setViewportW(w);
+    setViewportH(h);
+    setIsViewportCustom(true);
+    interactiveRef.current?.resize(w, h);
+    fitInteractiveViewport();
+  };
+
   const startInteractivePreview = (forceAutoViewport = false) => {
     if (!inputUrl.trim()) return;
     setInteractiveError(null);
-    setIsInteractiveReady(false);
     if (forceAutoViewport) {
       forceAutoViewportRef.current = true;
       setIsViewportCustom(false);
@@ -536,6 +517,17 @@ function App() {
     let url = inputUrl.trim();
     if (!/^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\//.test(url)) {
       url = 'http://' + url;
+    }
+    try {
+      if (!['http:', 'https:'].includes(new URL(url).protocol)) throw new Error();
+    } catch {
+      setInteractiveError('请输入有效的 http 或 https 地址。');
+      return;
+    }
+    if (interactiveRef.current && pendingInteractiveUrlRef.current === url) {
+      setRenderMode(RenderMode.INTERACTIVE);
+      resizeInteractiveViewport();
+      return;
     }
     pendingInteractiveUrlRef.current = url;
 
@@ -551,6 +543,8 @@ function App() {
   useEffect(() => {
     if (renderMode !== RenderMode.INTERACTIVE) return;
     if (!pendingInteractiveUrlRef.current) return;
+    if (interactiveRef.current?.iframe.isConnected) { fitInteractiveViewport(); return; }
+    interactiveRef.current = null;
 
     const url = pendingInteractiveUrlRef.current;
 
@@ -609,6 +603,16 @@ function App() {
     return () => clearTimeout(timer);
   }, [renderMode, interactiveSessionKey]);
 
+  useEffect(() => { fitInteractiveViewport(); }, [leftPanelRatio, renderMode]);
+  useEffect(() => () => {
+    interactiveRef.current?.destroy();
+    interactiveRef.current = null;
+  }, []);
+  useEffect(() => {
+    if (appMode !== AppMode.HTML_TO_SVG) stopInteractivePreview();
+    else setRenderMode(RenderMode.INTERACTIVE);
+  }, [appMode]);
+
   // Capture the current interactive iframe state as SVG
   const handleInteractiveCapture = async () => {
     setIsCapturing(true);
@@ -616,11 +620,13 @@ function App() {
       let svg: string;
       let name: string;
       let capturedUrl = inputUrl;
+      let capturedSource: FigmaCopySource | undefined;
 
       if (interactiveRef.current) {
         try {
           const result = await interactiveRef.current.capture();
           svg = result.svg;
+          capturedSource = result.figmaSource;
           capturedUrl = normalizeCapturedPageUrl(result.url || interactiveRef.current.getCurrentUrl());
           captureCountRef.current++;
           name = `Capture ${captureCountRef.current}`;
@@ -630,7 +636,8 @@ function App() {
       } else {
         // No interactive iframe — server-side fetch
         const result = await fetchUrlContent(inputUrl);
-        svg = await convertHtmlToSvgLocal(result.html, false, result.url);
+        svg = await convertHtmlToSvgLocal(result.html, false, result.url, false, undefined,
+          true, undefined, undefined, source => { capturedSource = source; });
         capturedUrl = result.url;
         captureCountRef.current++;
         name = `Page ${captureCountRef.current}`;
@@ -639,7 +646,7 @@ function App() {
       const pageId = Date.now().toString();
       const newPage: PageItem = {
         id: pageId, url: capturedUrl, name,
-        svgContent: svg, isConverting: false, error: null,
+        svgContent: svg, figmaSource: capturedSource, isConverting: false, error: null,
       };
       setPages(prev => [...prev, newPage]);
       setActivePageId(pageId);
@@ -679,7 +686,7 @@ function App() {
     if (!mainEl) return;
     const rect = mainEl.getBoundingClientRect();
     const ratio = ((e.clientX - rect.left) / rect.width) * 100;
-    setLeftPanelRatio(Math.max(25, Math.min(75, ratio)));
+    setLeftPanelRatio(Math.max(15, Math.min(75, ratio)));
   };
 
   const handleDividerMouseUp = () => {
@@ -754,63 +761,69 @@ function App() {
       <main className="flex-1 flex flex-col lg:flex-row overflow-hidden">
 
         {/* Left Panel: Input Editor */}
+        {isHtmlToSvg ? (
+          <aside className="flex flex-col border-r border-gray-800 bg-gray-900/30 overflow-hidden" style={{ width: `${leftPanelRatio}%`, minWidth: 220 }}>
+            <div className="flex items-center justify-between gap-2 p-4 border-b border-gray-800">
+              <span className="text-sm font-medium text-gray-200">捕获记录 ({pages.length})</span>
+              <button onClick={handleBatchDownload} disabled={!pages.some(page => page.svgContent)} className="text-xs text-indigo-300 disabled:opacity-30">批量下载</button>
+            </div>
+            <div className="flex-1 overflow-auto p-3 space-y-2">
+              {!pages.length && <p className="text-sm leading-6 text-gray-500 p-2">在右侧输入地址，进入页面后点击“捕获此画面”。捕获结果会保存在这里。</p>}
+              {pages.map(page => (
+                <div key={page.id} className={`rounded-lg border p-3 cursor-pointer ${activePageId === page.id && renderMode === RenderMode.FIGMA ? 'border-indigo-500 bg-indigo-500/10' : 'border-gray-800 hover:bg-gray-800'}`} onClick={() => {
+                  setActivePageId(page.id);
+                  setSvgState(prev => ({ ...prev, svgContent: page.svgContent || '' }));
+                  setRenderMode(RenderMode.FIGMA);
+                }}>
+                  <div className="flex items-center gap-2">
+                    <input aria-label="捕获名称" value={page.name} onChange={event => updatePageName(page.id, event.target.value)} onClick={event => event.stopPropagation()} className="min-w-0 flex-1 bg-transparent text-sm text-gray-200 focus:outline-none" />
+                    <button aria-label="删除捕获" onClick={event => { event.stopPropagation(); removePage(page.id); }} className="text-gray-500 hover:text-red-400"><X className="w-4 h-4" /></button>
+                  </div>
+                  <p className="mt-2 truncate text-xs text-gray-500" title={page.url}>{page.url}</p>
+                </div>
+              ))}
+            </div>
+          </aside>
+        ) : (
         <div
           className={`flex flex-col border-r border-gray-800 bg-gray-900/30 overflow-hidden ${viewMode === ViewMode.SPLIT ? '' : 'hidden'}`}
           style={viewMode === ViewMode.SPLIT ? { width: `${leftPanelRatio}%`, minWidth: 280 } : undefined}
         >
-          <div className="flex items-center justify-between p-4 border-b border-gray-800">
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b border-gray-800">
             <div className="flex items-center space-x-2 text-gray-300">
-              {isHtmlToSvg ? <Code className="w-4 h-4" /> : <FileCode2 className="w-4 h-4" />}
-              <span className="text-sm font-medium">
-                {isHtmlToSvg ? (inputMode === InputMode.URL ? 'Input URL' : 'Input HTML / CSS') : 'Input SVG'}
-              </span>
+              {!isHtmlToSvg && (
+                <>
+                  <FileCode2 className="w-4 h-4" />
+                  <span className="text-sm font-medium">Input SVG</span>
+                </>
+              )}
 
               {/* URL/HTML Toggle - only for HTML→SVG */}
               {isHtmlToSvg && (
-                <div className="flex bg-gray-800 p-0.5 rounded ml-2">
+                <div className="flex shrink-0 bg-gray-800 p-1 rounded-lg">
                   <button
                     onClick={() => setInputMode(InputMode.HTML)}
-                    className={`flex items-center space-x-1 px-2 py-1 rounded text-xs font-medium transition-all ${inputMode === InputMode.HTML
+                    className={`flex min-h-11 items-center gap-2 whitespace-nowrap px-3 py-2.5 rounded-md text-sm font-medium transition-all ${inputMode === InputMode.HTML
                       ? 'bg-gray-600 text-white'
                       : 'text-gray-400 hover:text-gray-200'
                       }`}
                   >
-                    <Code className="w-3 h-3" />
+                    <Code className="w-4 h-4" />
                     <span>HTML</span>
                   </button>
                   <button
                     onClick={() => setInputMode(InputMode.URL)}
-                    className={`flex items-center space-x-1 px-2 py-1 rounded text-xs font-medium transition-all ${inputMode === InputMode.URL
+                    className={`flex min-h-11 items-center gap-2 whitespace-nowrap px-3 py-2.5 rounded-md text-sm font-medium transition-all ${inputMode === InputMode.URL
                       ? 'bg-blue-600 text-white'
                       : 'text-gray-400 hover:text-gray-200'
                       }`}
                   >
-                    <Globe className="w-3 h-3" />
+                    <Globe className="w-4 h-4" />
                     <span>URL</span>
                   </button>
                 </div>
               )}
 
-              {/* Local File Upload Button - only for HTML→SVG */}
-              {isHtmlToSvg && (
-                <div className="ml-2">
-                  <input
-                    ref={htmlFileInputRef}
-                    type="file"
-                    accept=".html,.htm,text/html"
-                    onChange={handleHtmlFileUpload}
-                    className="hidden"
-                  />
-                  <button
-                    onClick={() => htmlFileInputRef.current?.click()}
-                    className="flex items-center space-x-1 px-2 py-1 rounded text-xs font-medium transition-all text-gray-400 hover:text-gray-200 hover:bg-gray-800"
-                    title="选择本地 HTML 文件"
-                  >
-                    <FolderOpen className="w-3 h-3" />
-                    <span>本地文件</span>
-                  </button>
-                </div>
-              )}
             </div>
 
             {/* Mode Toggle - only for HTML→SVG */}
@@ -818,67 +831,43 @@ function App() {
               <div className="flex items-center space-x-4">
                 {/* Render Mode Toggle (Figma vs Browser) */}
                 {conversionMode === ConversionMode.LOCAL && (
-                  <div className="flex bg-gray-800 p-1 rounded-lg">
+                  <div className="flex shrink-0 bg-gray-800 p-1 rounded-lg">
                     <button
-                      onClick={() => { stopInteractivePreview(); setRenderMode(RenderMode.BROWSER); }}
-                      className={`flex items-center space-x-1 px-2 py-1 rounded-md text-xs font-medium transition-all ${renderMode === RenderMode.BROWSER
+                      onClick={() => setRenderMode(RenderMode.FIGMA)}
+                      className={`flex min-h-11 items-center gap-2 whitespace-nowrap px-3 py-2.5 rounded-md text-sm font-medium transition-all ${renderMode === RenderMode.BROWSER
                         ? 'bg-blue-600 text-white shadow-sm'
                         : 'text-gray-400 hover:text-gray-200'
                         }`}
                       title="High Fidelity (foreignObject) - Best for viewing"
                     >
-                      <Globe className="w-3 h-3" />
+                      <Globe className="w-4 h-4" />
                       <span>Browser View</span>
                     </button>
                     <button
                       onClick={() => { stopInteractivePreview(); setRenderMode(RenderMode.FIGMA); }}
-                      className={`flex items-center space-x-1 px-2 py-1 rounded-md text-xs font-medium transition-all ${renderMode === RenderMode.FIGMA
+                      className={`flex min-h-11 items-center gap-2 whitespace-nowrap px-3 py-2.5 rounded-md text-sm font-medium transition-all ${renderMode === RenderMode.FIGMA
                         ? 'bg-purple-600 text-white shadow-sm'
                         : 'text-gray-400 hover:text-gray-200'
                         }`}
                       title="Figma Compatible (Standard SVG) - Best for export"
                     >
-                      <Box className="w-3 h-3" />
+                      <Box className="w-4 h-4" />
                       <span>Figma SVG</span>
                     </button>
                     <button
                       onClick={() => startInteractivePreview()}
-                      className={`flex items-center space-x-1 px-2 py-1 rounded-md text-xs font-medium transition-all ${renderMode === RenderMode.INTERACTIVE
+                      className={`flex min-h-11 items-center gap-2 whitespace-nowrap px-3 py-2.5 rounded-md text-sm font-medium transition-all ${renderMode === RenderMode.INTERACTIVE
                         ? 'bg-amber-600 text-white shadow-sm'
                         : 'text-gray-400 hover:text-gray-200'
                         }`}
                       title="Interactive Preview - Click around to navigate, then capture each state"
                     >
-                      <Globe className="w-3 h-3" />
+                      <Globe className="w-4 h-4" />
                       <span>交互捕获</span>
                     </button>
                   </div>
                 )}
 
-                <div className="h-4 w-px bg-gray-700"></div>
-
-                <div className="flex bg-gray-800 p-1 rounded-lg">
-                  <button
-                    onClick={() => setConversionMode(ConversionMode.LOCAL)}
-                    className={`flex items-center space-x-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${conversionMode === ConversionMode.LOCAL
-                      ? 'bg-emerald-600 text-white shadow-sm'
-                      : 'text-gray-400 hover:text-gray-200'
-                      }`}
-                  >
-                    <Zap className="w-3 h-3" />
-                    <span>Local</span>
-                  </button>
-                  <button
-                    onClick={() => setConversionMode(ConversionMode.AI)}
-                    className={`flex items-center space-x-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${conversionMode === ConversionMode.AI
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-gray-400 hover:text-gray-200'
-                      }`}
-                  >
-                    <Sparkles className="w-3 h-3" />
-                    <span>AI Vector</span>
-                  </button>
-                </div>
               </div>
             ) : (
               // Local/AI toggle for SVG→HTML
@@ -1144,27 +1133,29 @@ function App() {
                     </p>
                   )}
                 </div>
-                <Button
-                  onClick={handleHtmlToSvg}
-                  isLoading={svgState.isLoading}
-                  className={`w-full shadow-lg ${conversionMode === ConversionMode.AI
-                    ? 'shadow-indigo-900/20 bg-indigo-600 hover:bg-indigo-700'
-                    : 'shadow-emerald-900/20 bg-emerald-600 hover:bg-emerald-700 focus:ring-emerald-500'
-                    }`}
-                  icon={conversionMode === ConversionMode.AI ? <Sparkles className="w-4 h-4" /> : <Zap className="w-4 h-4" />}
-                >
-                  {conversionMode === ConversionMode.AI ? 'Generate Vectors' : 'Render Local'}
-                </Button>
-                {conversionMode === ConversionMode.LOCAL && (
+                <div className="grid grid-cols-2 gap-3">
                   <Button
-                    onClick={handleExportFigmaJSON}
-                    isLoading={isFigmaExporting}
-                    className="w-full mt-2 shadow-lg shadow-purple-900/20 bg-purple-600 hover:bg-purple-700 focus:ring-purple-500"
-                    icon={<Download className="w-4 h-4" />}
+                    onClick={handleHtmlToSvg}
+                    isLoading={svgState.isLoading}
+                    className={`w-full min-h-11 shadow-lg ${conversionMode === ConversionMode.AI
+                      ? 'shadow-indigo-900/20 bg-indigo-600 hover:bg-indigo-700'
+                      : 'shadow-emerald-900/20 bg-emerald-600 hover:bg-emerald-700 focus:ring-emerald-500'
+                      }`}
+                    icon={conversionMode === ConversionMode.AI ? <Sparkles className="w-4 h-4" /> : <Zap className="w-4 h-4" />}
                   >
-                    导出 Figma JSON
+                    {conversionMode === ConversionMode.AI ? 'Generate Vectors' : 'Render Local'}
                   </Button>
-                )}
+                  {conversionMode === ConversionMode.LOCAL && (
+                    <Button
+                      onClick={handleExportFigmaJSON}
+                      isLoading={isFigmaExporting}
+                      className="w-full min-h-11 shadow-lg shadow-purple-900/20 bg-purple-600 hover:bg-purple-700 focus:ring-purple-500"
+                      icon={<Download className="w-4 h-4" />}
+                    >
+                      导出 Figma JSON
+                    </Button>
+                  )}
+                </div>
                 {svgState.error && (
                   <p className="mt-2 text-xs text-red-400 text-center animate-pulse">
                     {svgState.error}
@@ -1205,6 +1196,7 @@ function App() {
             )}
           </div>
         </div >
+        )}
 
         {/* Resizable Divider */}
         {viewMode === ViewMode.SPLIT && (
@@ -1222,11 +1214,35 @@ function App() {
           className="flex flex-col h-full bg-gray-950 overflow-hidden"
           style={viewMode === ViewMode.SPLIT ? { width: `${100 - leftPanelRatio}%`, minWidth: 280 } : { width: '100%' }}
         >
-          {/* Interactive Capture Mode */}
-          {isHtmlToSvg && renderMode === RenderMode.INTERACTIVE ? (
-            <div className="flex flex-col h-full relative">
+          {isHtmlToSvg && (
+            <>
+              <div className="flex shrink-0 flex-wrap items-center gap-3 p-3 border-b border-gray-800 bg-gray-900">
+                <div className="flex shrink-0 gap-1 rounded-lg bg-gray-800 p-1">
+                  <button onClick={() => setInputMode(InputMode.URL)} className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${inputMode === InputMode.URL ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}><Globe className="w-4 h-4" />URL</button>
+                  <button onClick={() => { setInputMode(InputMode.HTML); setRenderMode(RenderMode.FIGMA); }} className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${inputMode === InputMode.HTML ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}><Code className="w-4 h-4" />输入 HTML</button>
+                </div>
+                {inputMode === InputMode.URL ? (
+                  <>
+                    <input aria-label="页面地址" placeholder="输入页面地址，例如 http://localhost:3000" value={inputUrl} onChange={event => setInputUrl(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') startInteractivePreview(); }} className="min-w-0 flex-1 rounded-lg border border-gray-700 bg-gray-950 px-3 py-2.5 text-sm text-gray-200 focus:outline-none focus:border-indigo-500" />
+                    <button onClick={() => startInteractivePreview()} disabled={!inputUrl.trim() || isCapturing} className="shrink-0 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-40 px-4 py-2.5 text-sm font-medium">交互捕获</button>
+                  </>
+                ) : (
+                  <Button onClick={handleHtmlToSvg} isLoading={svgState.isLoading} disabled={!inputHtml.trim()} icon={<Zap className="w-4 h-4" />}>渲染 HTML</Button>
+                )}
+              </div>
+              {inputMode === InputMode.HTML && (
+                <div className="shrink-0 border-b border-gray-800 bg-gray-950">
+                  <textarea aria-label="HTML 源码" value={inputHtml} onChange={event => setInputHtml(event.target.value)} placeholder="粘贴 HTML 源码，支持内联样式或完整 HTML 文档" spellCheck={false} className="block h-48 w-full resize-y bg-gray-950 p-4 font-mono text-sm leading-6 text-gray-300 focus:outline-none" />
+                  {svgState.error && <p role="alert" className="px-4 pb-3 text-sm text-red-400">{svgState.error}</p>}
+                </div>
+              )}
+            </>
+          )}
+          {/* Keep the live page mounted while inspecting captured results. */}
+          {isHtmlToSvg && (
+            <div className={`flex-1 min-h-0 flex-col relative ${renderMode === RenderMode.INTERACTIVE ? 'flex' : 'hidden'}`}>
               {/* Capture button bar */}
-              <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-850 z-20">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-3 border-b border-gray-800 bg-gray-850 z-20">
                 <div className="flex items-center space-x-4">
                   <span className="text-xs text-amber-400 flex items-center">
                     <Globe className="w-3.5 h-3.5 mr-1.5" />
@@ -1238,19 +1254,20 @@ function App() {
                     </span>
                   )}
                   {/* Device preset toolbar — like Chrome DevTools */}
-                  <div className="flex items-center space-x-1 text-[10px] text-gray-400">
+                  <div className="flex flex-wrap items-center gap-1 text-xs text-gray-400">
                     <span className="mr-1">画面:</span>
                     {[
-                      { label: '📱 SE', w: 375, h: 667 },
-                      { label: '📱 14', w: 390, h: 844 },
-                      { label: '� Pad', w: 768, h: 1024 },
-                      { label: '💻 HD', w: 1280, h: 720 },
-                      { label: '🖥 FHD', w: 1920, h: 1080 },
+                      { label: 'SE', w: 375, h: 667 },
+                      { label: '14', w: 390, h: 844 },
+                      { label: 'Pad', w: 768, h: 1024 },
+                      { label: 'HD', w: 1280, h: 720 },
+                      { label: 'QHD', w: 1440, h: 900 },
+                      { label: 'FHD', w: 1920, h: 1080 },
                     ].map(p => (
                       <button
                         key={p.label}
-                        onClick={() => { setViewportW(p.w); setViewportH(p.h); setIsViewportCustom(true); startInteractivePreview(false); }}
-                        className={`px-1.5 py-0.5 rounded hover:bg-gray-700 hover:text-white transition-colors ${viewportW === p.w && viewportH === p.h ? 'bg-gray-700 text-white' : ''}`}
+                        onClick={() => resizeInteractiveViewport(p.w, p.h)}
+                        className={`px-2.5 py-1.5 rounded hover:bg-gray-700 hover:text-white transition-colors ${viewportW === p.w && viewportH === p.h ? 'bg-gray-700 text-white' : ''}`}
                         title={`${p.label} ${p.w}×${p.h}`}
                       >
                         {p.label}
@@ -1258,25 +1275,25 @@ function App() {
                     ))}
                     <span className="mx-1 text-gray-600">|</span>
                     <input
-                      type="number" value={viewportW}
+                      aria-label="画面宽度" type="number" value={viewportW} onKeyDown={event => { if (event.key === 'Enter') resizeInteractiveViewport(); }}
                       onChange={(e) => setViewportW(Number(e.target.value) || 375)}
-                      className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:border-gray-600" min={320} max={2560}
+                      className="w-16 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:border-gray-600" min={320} max={2560}
                     />
                     <span>×</span>
                     <input
-                      type="number" value={viewportH}
+                      aria-label="画面高度" type="number" value={viewportH} onKeyDown={event => { if (event.key === 'Enter') resizeInteractiveViewport(); }}
                       onChange={(e) => setViewportH(Number(e.target.value) || 667)}
-                      className="w-12 px-1 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:border-gray-600" min={320} max={2560}
+                      className="w-16 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:border-gray-600" min={320} max={2560}
                     />
-                    <button onClick={() => startInteractivePreview()} className="text-gray-500 hover:text-white" title="应用尺寸">⟳</button>
+                    <button onClick={() => resizeInteractiveViewport()} className="text-gray-500 hover:text-white" title="应用尺寸">应用</button>
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
                   <button
-                    onClick={() => { stopInteractivePreview(); setRenderMode(RenderMode.BROWSER); }}
+                    onClick={() => setRenderMode(RenderMode.FIGMA)}
                     className="px-2.5 py-1 text-xs text-gray-400 hover:text-white bg-gray-800 rounded transition-colors"
                   >
-                    退出
+                    查看捕获
                   </button>
                   <button
                     onClick={handleInteractiveCapture}
@@ -1298,9 +1315,11 @@ function App() {
                 style={{ padding: '16px 0' }}
               />
             </div>
-          ) : isHtmlToSvg ? (
+          )}
+          {isHtmlToSvg && renderMode !== RenderMode.INTERACTIVE ? (
               <SvgPreview
                 svgContent={svgState.svgContent}
+                figmaSource={figmaSource}
                 isLoading={svgState.isLoading}
                 pages={pages}
                 activePageId={activePageId}
@@ -1312,13 +1331,13 @@ function App() {
                   }
                 }}
               />
-            ) : (
+            ) : !isHtmlToSvg ? (
               <HtmlPreview
                 htmlContent={htmlState.htmlContent}
                 cssContent={htmlState.cssContent}
                 isLoading={htmlState.isLoading}
               />
-            )}
+            ) : null}
         </div >
       </main >
     </div >

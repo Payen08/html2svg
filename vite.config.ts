@@ -1,7 +1,12 @@
+import { proxyContextFromReferer } from './services/proxyRequestContext';
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import fs from 'fs';
+import { rewriteProxyBrowserRouters } from './services/proxyRouterCompat';
+import { installProxyFrameGuards } from './services/proxyFrameCompat';
+import { selectCaptureDocument, serializeCaptureDocument } from './services/captureSnapshot';
+import { getLocalPingFangFont } from './services/localFigmaFont';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
@@ -35,7 +40,6 @@ export default defineConfig(({ mode }) => {
             res.end(JSON.stringify({ error: message }));
           };
 
-          let lastProxyContext: { targetOrigin: string; proxyPrefix: string } | null = null;
 
           const isLocalOrPrivateHost = (hostname: string) => {
             if (['localhost', '127.0.0.1', '0.0.0.0', '[::1]'].includes(hostname)) return true;
@@ -145,9 +149,9 @@ export default {
 
           const sendViteRuntimeStub = (requestPath: string, res: any) => {
             const cleanPath = requestPath.split('?')[0];
-            const source = cleanPath === '/@vite/client'
+            const source = cleanPath.endsWith('/@vite/client')
               ? viteClientStub
-              : cleanPath === '/@react-refresh'
+              : cleanPath.endsWith('/@react-refresh')
                 ? reactRefreshStub
                 : null;
 
@@ -197,7 +201,7 @@ export default {
                 return `${quote}${proxyPrefix}/${rest}`;
               });
 
-              return next;
+              return rewriteProxyBrowserRouters(next, proxyPrefix);
             };
 
             const rewriteCss = (source: string) => rewriteTargetOrigin(source)
@@ -241,13 +245,15 @@ export default {
       var resolved = new URL(value, window.location.href);
       var nextPath = resolved.pathname + resolved.search + resolved.hash;
       if (targetOrigins.indexOf(resolved.origin) !== -1) return proxyPrefix + nextPath;
-      if (
-        resolved.origin === window.location.origin &&
-        resolved.pathname !== proxyPrefix &&
-        resolved.pathname.indexOf(proxyPrefix + '/') !== 0 &&
-        resolved.pathname.indexOf('/proxy/') !== 0 &&
-        resolved.pathname.indexOf('/proxy-url/') !== 0
-      ) {
+      if (resolved.origin === window.location.origin) {
+        // Router links already include their proxy basename. Keep them stable:
+        // wrapping them again would also trigger an endless href mutation loop.
+        if (
+          resolved.pathname === proxyPrefix ||
+          resolved.pathname.indexOf(proxyPrefix + '/') === 0 ||
+          resolved.pathname.indexOf('/proxy/') === 0 ||
+          resolved.pathname.indexOf('/proxy-url/') === 0
+        ) return nextPath;
         return proxyPrefix + nextPath;
       }
       if (/^https?:$/.test(resolved.protocol)) {
@@ -261,10 +267,15 @@ export default {
     var next = proxifyUrl(raw);
     if (next !== raw) el.setAttribute(attr, next);
   }
+  (${installProxyFrameGuards.toString()})(proxifyUrl);
   function rewriteNavigations(root) {
     if (!root || !root.querySelectorAll) return;
     Array.prototype.forEach.call(root.querySelectorAll('a[href]'), function(anchor) {
       rewriteElementUrl(anchor, 'href');
+    });
+    if (root.tagName === 'IFRAME') rewriteElementUrl(root, 'src');
+    Array.prototype.forEach.call(root.querySelectorAll('iframe[src]'), function(frame) {
+      rewriteElementUrl(frame, 'src');
     });
     Array.prototype.forEach.call(root.querySelectorAll('form[action]'), function(form) {
       rewriteElementUrl(form, 'action');
@@ -283,41 +294,6 @@ export default {
         return originalReplaceState.call(this, state, title, nextUrl == null ? nextUrl : proxifyUrl(String(nextUrl)));
       };
     } catch(e) {}
-  }
-  function syncFormState(sourceRoot, cloneRoot) {
-    var sourceFields = sourceRoot.querySelectorAll('input, textarea, select');
-    var cloneFields = cloneRoot.querySelectorAll('input, textarea, select');
-    Array.prototype.forEach.call(sourceFields, function(source, index) {
-      var clone = cloneFields[index];
-      if (!clone) return;
-      var tag = source.tagName;
-      var type = (source.getAttribute('type') || '').toLowerCase();
-      if (tag === 'TEXTAREA') {
-        clone.textContent = source.value;
-      } else if (tag === 'SELECT') {
-        Array.prototype.forEach.call(source.options, function(option, optionIndex) {
-          if (clone.options[optionIndex]) clone.options[optionIndex].selected = option.selected;
-        });
-      } else if (type === 'checkbox' || type === 'radio') {
-        if (source.checked) clone.setAttribute('checked', '');
-        else clone.removeAttribute('checked');
-      } else {
-        clone.setAttribute('value', source.value);
-      }
-    });
-  }
-  function sanitizeSnapshot(clone) {
-    Array.prototype.forEach.call(clone.querySelectorAll('script, noscript, base'), function(node) {
-      node.remove();
-    });
-    Array.prototype.forEach.call(clone.querySelectorAll('*'), function(node) {
-      Array.prototype.slice.call(node.attributes).forEach(function(attr) {
-        if (/^on/i.test(attr.name)) node.removeAttribute(attr.name);
-      });
-      ['src', 'href', 'action', 'poster'].forEach(function(attr) {
-        if (node.hasAttribute(attr)) rewriteElementUrl(node, attr);
-      });
-    });
   }
   installNavigationGuards();
   rewriteNavigations(document);
@@ -344,18 +320,16 @@ export default {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['href', 'action']
+      attributeFilter: ['href', 'action', 'src']
     });
   } catch(e) {}
   window.addEventListener('message', function(event) {
     if (event.data && event.data.type === 'html2svg-capture') {
       try {
-        var clone = document.documentElement.cloneNode(true);
-        syncFormState(document, clone);
-        sanitizeSnapshot(clone);
-        var html = '<!DOCTYPE html>\\n' + clone.outerHTML;
+        var captureDoc = (${selectCaptureDocument.toString()})(document);
+        var snapshot = (${serializeCaptureDocument.toString()})(captureDoc);
         var target = event.source || window.parent;
-        target.postMessage({ type: 'html2svg-capture-result', html: html, url: window.location.href }, '*');
+        target.postMessage({ type: 'html2svg-capture-result', html: snapshot.html, url: snapshot.url }, '*');
       } catch(e) {
         var errorTarget = event.source || window.parent;
         errorTarget.postMessage({ type: 'html2svg-capture-error', error: e.message }, '*');
@@ -392,7 +366,10 @@ export default {
               if (contentType.includes('text/html') || contentType.includes('application/xhtml')) {
                 let html = rewriteHtml(bodyBuffer.toString('utf-8'));
                 const captureScript = buildCaptureScript(targetOrigin, proxyPrefix);
-                if (/<\/body>/i.test(html)) {
+                // Frame setters must be guarded before the target's scripts run.
+                if (/<head\b[^>]*>/i.test(html)) {
+                  html = html.replace(/<head\b[^>]*>/i, (head) => head + '\n' + captureScript);
+                } else if (/<\/body>/i.test(html)) {
                   html = html.replace(/<\/body>/i, captureScript + '\n</body>');
                 } else if (/<\/html>/i.test(html)) {
                   html = html.replace(/<\/html>/i, captureScript + '\n</html>');
@@ -422,12 +399,29 @@ export default {
           server.middlewares.use(async (req, res, next) => {
             const rawUrl = req.url || '';
 
-            if (
-              lastProxyContext
-              && /^\/(?:src|@vite|@react-refresh)(?:\/|$)/.test(rawUrl)
-            ) {
-              const targetPath = rawUrl;
-              await handleProxy(req, res, lastProxyContext.targetOrigin, targetPath, lastProxyContext.proxyPrefix);
+            if (rawUrl.startsWith('/api/figma-font')) {
+              try {
+                const weight = Number(new URL(rawUrl, 'http://local').searchParams.get('weight')) || 400;
+                const font = getLocalPingFangFont(weight);
+                res.writeHead(200, {
+                  ...CORS, 'Content-Type': 'font/ttf',
+                  'X-Font-Weight': String(font.weight), 'X-Font-Style': font.style,
+                  'Cache-Control': 'private, max-age=3600',
+                });
+                res.end(font.bytes);
+              } catch (error) {
+                sendError(res, 503, error instanceof Error ? error.message : '无法读取 PingFang SC 字体。');
+              }
+              return;
+            }
+
+            const requestContext = proxyContextFromReferer(req.headers.referer);
+            if (requestContext && !/^\/(?:proxy|proxy-url|__html2svg_internal__)(?:\/|$)/.test(rawUrl)
+                && isAllowedProxyHost(new URL(requestContext.targetOrigin).hostname)) {
+              // A proxied page can navigate an iframe with an unprefixed root URL.
+              // Redirect to restore the prefix before Vite's SPA fallback serves our app.
+              res.writeHead(307, { Location: requestContext.proxyPrefix + rawUrl });
+              res.end();
               return;
             }
 
@@ -442,7 +436,6 @@ export default {
                   return;
                 }
                 const proxyPrefix = `/proxy-url/${encodedOrigin}`;
-                lastProxyContext = { targetOrigin: parsedOrigin.origin, proxyPrefix };
                 await handleProxy(req, res, parsedOrigin.origin, targetPath, proxyPrefix);
               } catch {
                 sendError(res, 400, 'Invalid proxy origin.');
@@ -456,7 +449,6 @@ export default {
               const targetPath = proxyMatch[2] || '/';
               const targetOrigin = `http://127.0.0.1:${port}`;
               const proxyPrefix = `/proxy/${port}`;
-              lastProxyContext = { targetOrigin, proxyPrefix };
               await handleProxy(req, res, targetOrigin, targetPath, proxyPrefix);
               return;
             }

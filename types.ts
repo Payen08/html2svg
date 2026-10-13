@@ -45,6 +45,14 @@ export interface PageItem {
   svgContent: string | null;
   isConverting: boolean;
   error: string | null;
+  figmaSource?: FigmaCopySource;
+}
+
+export interface FigmaCopySource {
+  html: string;
+  baseUrl: string;
+  width: number;
+  height: number;
 }
 
 export const SAMPLE_SVG = `<svg width="400" height="200" xmlns="http://www.w3.org/2000/svg">

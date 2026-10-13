@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Download, Copy, Check, ZoomIn, ZoomOut, Maximize, Move, Grid3X3, Sun, Moon, Hash, Layers } from 'lucide-react';
+import { Download, Copy, Check, ZoomIn, ZoomOut, Maximize, Move, Grid3X3, Sun, Moon, Hash, Layers, Figma } from 'lucide-react';
 import { Button } from './Button';
-import { PageItem } from '../types';
+import { PageItem, FigmaCopySource } from '../types';
+import { copySvgToClipboard } from '../services/svgClipboardService';
+import { copyFigmaToClipboard } from '../services/figmaClipboardService';
 
 interface SvgPreviewProps {
   svgContent: string | null;
@@ -9,12 +11,17 @@ interface SvgPreviewProps {
   pages?: PageItem[];
   activePageId?: string | null;
   onPageSelect?: (id: string) => void;
+  figmaSource?: FigmaCopySource | null;
 }
 
 type BackgroundType = 'grid' | 'dots' | 'dark' | 'light' | 'transparent';
 
-export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, pages, activePageId, onPageSelect }) => {
+export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, pages, activePageId, onPageSelect, figmaSource }) => {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const [isCopying, setIsCopying] = useState(false);
+  const [figmaCopied, setFigmaCopied] = useState(false);
+  const [isFigmaCopying, setIsFigmaCopying] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -22,6 +29,24 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
   const [bgType, setBgType] = useState<BackgroundType>('dots');
 
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const pagesWithContent = pages?.filter(p => p.svgContent) || [];
+  const showPageTabs = pagesWithContent.length > 0;
+  const activePage = pagesWithContent.find(page => page.id === activePageId);
+  const effectiveSvgContent = activePage?.svgContent || svgContent;
+  const effectiveFigmaSource = activePage ? activePage.figmaSource : figmaSource;
+
+  useEffect(() => {
+    setCopied(false);
+    setCopyError(null);
+    setFigmaCopied(false);
+  }, [effectiveSvgContent]);
+
+  useEffect(() => {
+    if (!figmaCopied) return;
+    const timer = setTimeout(() => setFigmaCopied(false), 5000);
+    return () => clearTimeout(timer);
+  }, [figmaCopied]);
 
   useEffect(() => {
     if (copied) {
@@ -39,15 +64,39 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
   }, [svgContent]);
 
   const handleCopy = async () => {
-    if (svgContent) {
-      await navigator.clipboard.writeText(svgContent);
+    if (!effectiveSvgContent) return;
+    setIsCopying(true);
+    setCopied(false);
+    setCopyError(null);
+    try {
+      await copySvgToClipboard(effectiveSvgContent);
       setCopied(true);
+    } catch (error) {
+      setCopyError(error instanceof Error ? error.message : '复制失败，请重试。');
+    } finally {
+      setIsCopying(false);
+    }
+  };
+
+  const handleCopyFigma = async () => {
+    if (!effectiveFigmaSource) return;
+    setIsFigmaCopying(true);
+    setCopyError(null);
+    setCopied(false);
+    setFigmaCopied(false);
+    try {
+      await copyFigmaToClipboard(effectiveFigmaSource, activePage?.name || 'Captured page');
+      setFigmaCopied(true);
+    } catch (error) {
+      setCopyError(error instanceof Error ? error.message : '复制 Figma 失败，请重试。');
+    } finally {
+      setIsFigmaCopying(false);
     }
   };
 
   const handleDownload = () => {
-    if (svgContent) {
-      downloadSvg(svgContent, `ui-artboard-${Date.now()}.svg`);
+    if (effectiveSvgContent) {
+      downloadSvg(effectiveSvgContent, `ui-artboard-${Date.now()}.svg`);
     }
   };
 
@@ -155,19 +204,6 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
     }
   };
 
-  // Determine which pages have SVG content (for tabs)
-  const pagesWithContent = pages?.filter(p => p.svgContent) || [];
-  const showPageTabs = pagesWithContent.length > 0;
-
-  // Determine effective SVG content: if pages exist and one is active, show that page's content
-  const effectiveSvgContent = (() => {
-    if (showPageTabs && activePageId) {
-      const activePage = pages?.find(p => p.id === activePageId);
-      if (activePage?.svgContent) return activePage.svgContent;
-    }
-    return svgContent;
-  })();
-
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-full bg-gray-900 rounded-xl border border-gray-800 p-8 text-gray-500 animate-pulse">
@@ -230,13 +266,26 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
           </div>
 
           <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleCopy}
-            className="h-8 px-2"
-            title="Copy SVG Code"
+            variant="secondary"
+            onClick={handleCopyFigma}
+            isLoading={isFigmaCopying}
+            disabled={!effectiveFigmaSource || isCopying}
+            className="h-8 px-3 text-xs whitespace-nowrap"
+            title={effectiveFigmaSource ? '复制原生 Figma 图层，文字使用 PingFang SC，支持自动布局' : '请重新捕获或使用 Figma SVG 渲染，保存页面布局后即可复制'}
+            icon={figmaCopied ? <Check className="w-4 h-4 text-green-400" /> : <Figma className="w-4 h-4" />}
           >
-            {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+            {isFigmaCopying ? '准备 Figma…' : figmaCopied ? 'Figma 已复制' : '复制 Figma'}
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={handleCopy}
+            isLoading={isCopying}
+            disabled={isFigmaCopying}
+            className="h-8 px-3 text-xs whitespace-nowrap"
+            title="复制当前画板 SVG，然后在 Figma 画布中粘贴"
+            icon={copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+          >
+            {copied ? '已复制' : '复制 SVG'}
           </Button>
           {showPageTabs && pagesWithContent.length > 1 && (
             <Button
@@ -260,6 +309,12 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
           </Button>
         </div>
       </div>
+
+      {(copied || figmaCopied || copyError) && (
+        <div role={copyError ? 'alert' : 'status'} className={`px-3 py-2 text-xs border-b border-gray-800 ${copyError ? 'text-red-300 bg-red-950/30' : 'text-emerald-300 bg-emerald-950/30'}`}>
+          {copyError || (figmaCopied ? 'Figma 图层已复制，在 Figma Design 画布中按 ⌘V / Ctrl+V 粘贴。' : 'SVG 已复制，在 Figma 画布中按 ⌘V / Ctrl+V 粘贴。')}
+        </div>
+      )}
 
       {/* Page Tabs */}
       {showPageTabs && (

@@ -1,3 +1,4 @@
+import { expandSvgUses } from './svgUseService';
 /**
  * Converts HTML to Figma-compatible SVG by rendering in an iframe
  * with proper script execution support.
@@ -9,6 +10,10 @@
  * - Better Text Positioning (Center-based)
  * - Rasterizes Icon Fonts to <image>
  */
+
+import { createExportAssetLoader } from './exportAssetService';
+import { serializeCaptureDocument } from './captureSnapshot';
+import type { FigmaCopySource } from '../types';
 
 let uuidCounter = 0;
 const getUniqueId = (prefix: string) => `${prefix}-${++uuidCounter}`;
@@ -22,6 +27,7 @@ export const convertHtmlToSvgLocal = async (
   executeScripts: boolean = true,
   viewportW?: number,
   viewportH?: number,
+  onSnapshot?: (source: FigmaCopySource) => void,
 ): Promise<string> => {
   if (!htmlInput.trim()) return '';
 
@@ -205,7 +211,12 @@ export const convertHtmlToSvgLocal = async (
             revealHiddenContent(iframeDoc.body);
             // ---------------------------------------------
 
+            await expandSvgUses(iframeDoc);
             const rootElement = iframeDoc.body;
+            if (onSnapshot) {
+              const snapshot = serializeCaptureDocument(iframeDoc);
+              onSnapshot({ html: snapshot.html, baseUrl: iframeDoc.baseURI, width: iframeW, height: iframeH });
+            }
             // Force layout recalculation
             rootElement.getBoundingClientRect();
 
@@ -436,7 +447,9 @@ export const convertHtmlToSvgLocal = async (
                 clone.setAttribute('overflow', 'visible');
                 clone.setAttribute('color', color);
                 if (!clone.getAttribute('viewBox')) {
-                  clone.setAttribute('viewBox', `0 0 ${sw} ${sh}`);
+                  const intrinsicW = parseFloat(svgEl.getAttribute('width') || '') || sw;
+                  const intrinsicH = parseFloat(svgEl.getAttribute('height') || '') || sh;
+                  clone.setAttribute('viewBox', `0 0 ${intrinsicW} ${intrinsicH}`);
                 }
                 if (!clone.getAttribute('preserveAspectRatio')) {
                   clone.setAttribute('preserveAspectRatio', 'xMidYMid meet');
@@ -446,7 +459,25 @@ export const convertHtmlToSvgLocal = async (
                 }
 
                 const paintAttrs = ['fill', 'stroke', 'stop-color', 'flood-color'];
+                // Separate copies of the same icon must not share gradient/clip IDs.
+                const idMap = new Map<string, string>();
+                [clone, ...Array.from(clone.querySelectorAll('[id]'))].forEach(node => {
+                  const id = node.getAttribute('id');
+                  if (id) {
+                    const nextId = getUniqueId('icon');
+                    idMap.set(id, nextId);
+                    node.setAttribute('id', nextId);
+                  }
+                });
                 [clone, ...Array.from(clone.querySelectorAll('*'))].forEach((node) => {
+                  Array.from(node.attributes).forEach(attr => {
+                    let value = attr.value.replace(/url\((["']?)#([^)'"\s]+)\1\)/g,
+                      (match, _quote, id) => idMap.has(id) ? `url(#${idMap.get(id)})` : match);
+                    if (['href', 'xlink:href'].includes(attr.name) && value.startsWith('#') && idMap.has(value.slice(1))) {
+                      value = `#${idMap.get(value.slice(1))}`;
+                    }
+                    if (value !== attr.value) node.setAttribute(attr.name, value);
+                  });
                   paintAttrs.forEach((attr) => {
                     if (node.getAttribute(attr) === 'currentColor') {
                       node.setAttribute(attr, color);
@@ -463,6 +494,23 @@ export const convertHtmlToSvgLocal = async (
               } catch (e) {
                 return '';
               }
+            };
+
+            const loadExportAsset = createExportAssetLoader();
+            const renderEmbeddedAsset = async (
+              url: string, x: number, y: number, width: number, height: number,
+              style: CSSStyleDeclaration, clipAttr = '', preserveAspectRatio = 'xMidYMid slice'
+            ): Promise<string> => {
+              const asset = await loadExportAsset(url);
+              if (asset.kind === 'svg') {
+                const doc = new DOMParser().parseFromString(asset.source, 'image/svg+xml');
+                if (doc.querySelector('parsererror') || doc.documentElement.localName !== 'svg') {
+                  throw new Error(`SVG 图标无法解析: ${url}`);
+                }
+                const inline = svgElementToInlineSvg(doc.documentElement as unknown as SVGElement, x, y, width, height, style);
+                return clipAttr ? `<g ${clipAttr}>${inline}</g>\n` : `${inline}\n`;
+              }
+              return `<image href="${asset.source}" x="${x}" y="${y}" width="${width}" height="${height}" preserveAspectRatio="${preserveAspectRatio}" ${clipAttr} />\n`;
             };
 
             const canvasToImage = (canvas: HTMLCanvasElement): string => {
@@ -756,7 +804,7 @@ export const convertHtmlToSvgLocal = async (
                       clipAttr = `clip-path="url(#${clipId})"`;
                     }
 
-                    svgElements += `<image href="${src}" x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice" ${clipAttr} />\n`;
+                    svgElements += await renderEmbeddedAsset(src, x, y, w, h, style, clipAttr);
 
                     // Border overlay
                     const imgBorderColor = parseColor(style.borderColor);
@@ -839,9 +887,9 @@ export const convertHtmlToSvgLocal = async (
                   if (hasRadius) {
                     const imgClipId = getUniqueId('bg-clip');
                     defsContent += createShapeClip(imgClipId, x, y, w, h, radii);
-                    svgElements += `<image href="${bgImageUrl}" x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${imgClipId})" />\n`;
+                    svgElements += await renderEmbeddedAsset(bgImageUrl, x, y, w, h, style, `clip-path="url(#${imgClipId})"`);
                   } else {
-                    svgElements += `<image href="${bgImageUrl}" x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice" />\n`;
+                    svgElements += await renderEmbeddedAsset(bgImageUrl, x, y, w, h, style);
                   }
                 }
 

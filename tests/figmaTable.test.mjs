@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import test from 'node:test';
+import ts from 'typescript';
+import { encodeFigmaData, decodeFigmaData } from '@figit/fig-kiwi';
+const exports={};
+runInNewContext(ts.transpileModule(readFileSync(new URL('../services/figmaTableService.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,{exports});
+const guid=id=>({sessionID:0,localID:id});
+test('native table packet shares column anchors, preserves spans and encodes responsive Fill cells / Hug tracks',()=>{
+ const table={},row={};const cells=Array.from({length:5},(_,i)=>({tagName:i<2?'TH':'TD',parentElement:row}));
+ const elements=new Map([['table',table],['row',row],...cells.map((c,i)=>['cell'+i,c])]);
+ const root={querySelector:p=>elements.get(p),ownerDocument:{defaultView:{getComputedStyle:()=>({paddingTop:'6px',paddingBottom:'7px'})}}};
+ const nodes=[{guid:guid(0),type:'DOCUMENT',name:'Document'},{guid:guid(1),type:'CANVAS',name:'Page',parentIndex:{guid:guid(0),position:'!'}},{guid:guid(2),type:'FRAME',name:'table',size:{x:400,y:90},parentIndex:{guid:guid(1),position:'!'}},{guid:guid(3),type:'FRAME',name:'row',parentIndex:{guid:guid(2),position:'!'}},...cells.flatMap((c,i)=>[{guid:guid(4+i*2),type:'FRAME',name:'cell'+i,size:{x:200,y:30},parentIndex:{guid:guid(3),position:String(i)}},{guid:guid(5+i*2),type:'TEXT',textData:{characters:'content '+i},parentIndex:{guid:guid(4+i*2),position:'!'}}])];
+ const result={document:{nodeChanges:nodes,blobs:[]},trace:{entries:[{guid:guid(2),domPath:'table',tag:'table'},{guid:guid(3),domPath:'row',tag:'tr'},...cells.map((c,i)=>({guid:guid(4+i*2),domPath:'cell'+i,tag:c.tagName}))]}};
+ const plans=[{table,rows:3,columns:[{width:70,fixed:true,minimum:40,align:'LEFT',left:12,right:12},{width:330,fixed:false,minimum:120,align:'CENTER',left:12,right:12}],cells:cells.map((element,i)=>({element,row:Math.floor(i/2),column:i===4?0:i%2,rowSpan:1,columnSpan:i===4?2:1}))}];
+ exports.applyFigmaTableLayout(root,result,plans);
+ const decoded=decodeFigmaData(encodeFigmaData(result.document).figBytes).message.nodeChanges;
+ const grid=decoded.find(n=>n.stackMode==='GRID');assert.ok(grid);assert.equal(grid.gridColumns.entries.length,2);assert.equal(grid.gridRows.entries.length,3);
+ assert.equal(grid.stackCounterSizing,'RESIZE_TO_FIT_WITH_IMPLICIT_SIZE');assert.equal(grid.minSize.value.x,190);
+ assert.ok(grid.gridRowsSizing.entries.every(e=>e.trackSize.maxSizing.type==='HUG'&&e.trackSize.maxSizing.value===1));
+ assert.equal(grid.gridColumnsSizing.entries[0].trackSize.maxSizing.type,'FIXED');assert.equal(grid.gridColumnsSizing.entries[1].trackSize.maxSizing.type,'FLEX');
+ const nativeCells=decoded.filter(n=>n.parentIndex?.guid.localID===grid.guid.localID);assert.equal(nativeCells.length,5);
+ assert.deepEqual(nativeCells[0].gridColumnAnchor,nativeCells[2].gridColumnAnchor);assert.deepEqual(nativeCells[1].gridColumnAnchor,nativeCells[3].gridColumnAnchor);
+ assert.equal(nativeCells[4].gridColumnSpan,2);assert.ok(nativeCells.every(c=>c.stackChildPrimaryGrow===1&&c.stackChildAlignSelf==='STRETCH'&&c.frameMaskDisabled));
+ assert.ok(!decoded.some(n=>n.name==='row'));assert.ok(decoded.filter(n=>n.type==='TEXT').every(n=>n.textAutoResize==='HEIGHT'&&n.stackChildAlignSelf==='STRETCH'));
+});
