@@ -61,6 +61,9 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
             return 'HUG';
         }
         const size = declaredSize(element, axis);
+        const maximum = axis === 'width' ? style.maxWidth : style.maxHeight;
+        const measured = traces.get(guidKey(node.guid))?.rect[axis];
+        if (node.type === 'FRAME' && /px$/.test(maximum || '') && measured !== undefined && measured >= px(maximum) - 0.5) return 'FIXED';
         if (/^100(?:\.0+)?%$/.test(size)) return 'FILL';
         if (!/^(auto|min-content|max-content|fit-content)(\(|$)/.test(size)) return 'FIXED';
         if (node.type === 'TEXT' && axis === 'height') return 'HUG';
@@ -78,7 +81,9 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
 
     const rootNode = result.trace && nodes.find(node => guidKey(node.guid) === guidKey(result.trace!.rootGuid));
     if (rootNode?.type === 'FRAME') {
-        Object.assign(rootNode, { stackMode: 'VERTICAL', stackSpacing: 0, stackPrimarySizing: 'RESIZE_TO_FIT', stackCounterSizing: 'FIXED' });
+        // Fixed-position application shells can have a zero-height DOM mount.
+        // Hugging that mount would collapse the captured viewport on paste.
+        Object.assign(rootNode, { stackMode: 'VERTICAL', stackSpacing: 0, stackPrimarySizing: 'FIXED', stackCounterSizing: 'FIXED' });
     }
     // First give every content container its own layout and sizing, independently of its parent.
     for (const node of nodes) {
@@ -134,18 +139,7 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
         }
         node.stackPrimaryAlignItems = style.justifyContent === 'space-between' ? 'SPACE_BETWEEN' : align(style.justifyContent);
         node.stackCounterAlignItems = element.tagName === 'BUTTON' ? 'CENTER' : align(style.alignItems);
-        const gap = row ? style.columnGap : style.rowGap;
-        const measuredGaps = flow.slice(1).map((child, index) => {
-            const previous = traces.get(guidKey(flow[index].guid))?.rect;
-            const current = traces.get(guidKey(child.guid))?.rect;
-            if (!previous || !current) return 0;
-            return row ? current.x - previous.x - previous.width : current.y - previous.y - previous.height;
-        });
-        node.stackSpacing = gap && gap !== 'normal' ? px(gap) :
-            measuredGaps.length ? Math.max(0, Math.min(...measuredGaps)) : 0;
-        // Editable button groups wrap instead of overflowing when labels grow or the parent narrows.
-        const buttonGroup = flow.length > 1 && flow.every(child => elements.get(guidKey(child.guid))?.tagName === 'BUTTON');
-        const wrapping = row && (grid || style.flexWrap === 'wrap' || buttonGroup);
+        const wrapping = row && (grid || style.flexWrap === 'wrap');
         node.stackWrap = wrapping ? 'WRAP' : 'NO_WRAP';
         node.stackCounterSpacing = wrapping ? px(style.rowGap) : 0;
         const width = policy(node, element, 'width', parentElement);
@@ -166,6 +160,55 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
             return aOrder - bOrder || (aNode.compareDocumentPosition(bNode) & 4 ? -1 : 1);
         });
         if (style.flexDirection.endsWith('reverse')) flow.reverse();
+        const gap = row ? style.columnGap : style.rowGap;
+        const measuredGaps = flow.slice(1).map((child, index) => {
+            const previous = traces.get(guidKey(flow[index].guid))?.rect;
+            const current = traces.get(guidKey(child.guid))?.rect;
+            if (!previous || !current) return 0;
+            return row ? current.x - previous.x - previous.width : current.y - previous.y - previous.height;
+        });
+        node.stackSpacing = gap && gap !== 'normal' ? px(gap) :
+            measuredGaps.length ? Math.max(0, Math.min(...measuredGaps)) : 0;
+
+        // Figma Fill has no CSS margin. Carry cross-axis margins in a transparent
+        // stack, so a full-width banner still keeps its side insets when resized.
+        if (!grid) for (let index = 0; index < flow.length; index++) {
+            const child = flow[index];
+            const childElement = elements.get(guidKey(child.guid));
+            if (!childElement || childElement === element) continue;
+            const childStyle = styleOf(childElement);
+            const start = Math.max(0, px(row ? childStyle.marginTop : childStyle.marginLeft));
+            const end = Math.max(0, px(row ? childStyle.marginBottom : childStyle.marginRight));
+            if (start + end < 0.75) continue;
+            const current = traces.get(guidKey(child.guid));
+            if (!current || !child.size) continue;
+            const width = policy(child, childElement, 'width', element);
+            const height = policy(child, childElement, 'height', element);
+            const wrapper: NativeNode = {
+                type: 'FRAME', phase: 'CREATED', guid: { sessionID: node.guid.sessionID, localID: nextId++ },
+                name: `Margins / ${child.name}`, visible: true, opacity: 1, fillPaints: [], frameMaskDisabled: true,
+                parentIndex: { guid: node.guid, position: child.parentIndex!.position },
+                size: { x: child.size.x + (row ? 0 : start + end), y: child.size.y + (row ? start + end : 0) },
+                stackMode: node.stackMode, stackSpacing: 0, stackWrap: 'NO_WRAP', stackPositioning: 'AUTO',
+                stackPrimarySizing: (row ? width : height) === 'HUG' ? 'RESIZE_TO_FIT' : 'FIXED',
+                stackCounterSizing: (row ? height : width) === 'HUG' ? 'RESIZE_TO_FIT' : 'FIXED',
+                stackPrimaryAlignItems: 'MIN', stackCounterAlignItems: node.stackCounterAlignItems,
+                stackHorizontalPadding: row ? 0 : start, stackPaddingRight: row ? 0 : end,
+                stackVerticalPadding: row ? start : 0, stackPaddingBottom: row ? end : 0,
+            };
+            sizingOverrides.set(guidKey(wrapper.guid), { width, height });
+            sizingOverrides.set(guidKey(child.guid), { width, height });
+            traces.set(guidKey(wrapper.guid), { ...current, guid: wrapper.guid, rect: {
+                ...current.rect, x: current.rect.x - (row ? 0 : start), y: current.rect.y - (row ? start : 0),
+                width: wrapper.size!.x, height: wrapper.size!.y,
+            } });
+            child.parentIndex = { guid: wrapper.guid, position: '000000' };
+            child.stackPositioning = 'AUTO';
+            flow[index] = wrapper;
+            childNodes[childNodes.indexOf(child)] = wrapper;
+            children.set(guidKey(wrapper.guid), [child]);
+            nodes.push(wrapper);
+        }
         // Unequal CSS margins cannot be represented by a single Gap. A transparent
         // hugging stack carries the extra spacing as padding, keeping it responsive.
         if (!wrapping && node.stackPrimaryAlignItems !== 'SPACE_BETWEEN') {
@@ -216,7 +259,12 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
             const element = elements.get(guidKey(child.guid));
             let main = policy(child, element, row ? 'width' : 'height', parentElement);
             let cross = policy(child, element, row ? 'height' : 'width', parentElement);
-            if (element && parentElement && styleOf(parentElement).display.includes('flex') && px(styleOf(element).flexGrow) > 0 && element !== parentElement) main = 'FILL';
+            if (element && parentElement && styleOf(parentElement).display.includes('flex') && px(styleOf(element).flexGrow) > 0 && element !== parentElement) {
+                const axis = row ? 'width' : 'height';
+                const maximum = row ? styleOf(element).maxWidth : styleOf(element).maxHeight;
+                const measured = traces.get(guidKey(child.guid))?.rect[axis];
+                if (!(/px$/.test(maximum || '') && measured !== undefined && measured >= px(maximum) - 0.5)) main = 'FILL';
+            }
             // Wrapped grids need intrinsic card widths; grow would consume the entire row per card.
             if (parent.stackWrap === 'WRAP' && parentElement && styleOf(parentElement).display.includes('grid')) main = main === 'FILL' ? 'FIXED' : main;
             if (parent.stackPrimarySizing === 'RESIZE_TO_FIT' && main === 'FILL') main = 'HUG';
@@ -270,8 +318,10 @@ export function compactFigmaRoot(result: ConvertResult, name: string): void {
     design.transform = { m00: 1, m01: 0, m02: 0, m10: 0, m11: 1, m12: 0 };
     delete design.stackChildAlignSelf;
     delete design.stackChildPrimaryGrow;
-    if (design.stackMode === 'HORIZONTAL') design.stackPrimarySizing = 'FIXED';
-    else if (design.stackMode === 'VERTICAL') design.stackCounterSizing = 'FIXED';
+    if (design.stackMode === 'HORIZONTAL' || design.stackMode === 'VERTICAL') {
+        design.stackPrimarySizing = 'FIXED';
+        design.stackCounterSizing = 'FIXED';
+    }
     result.document.nodeChanges = nodes.filter(node => !removed.has(guidKey(node.guid)));
     result.trace.rootGuid = design.guid;
 }

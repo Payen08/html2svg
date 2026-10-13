@@ -10,7 +10,7 @@ runInNewContext(ts.transpileModule(readFileSync(new URL('../services/figmaAutoLa
 }).outputText, { exports });
 const defaults = {display:'block',position:'static',flexDirection:'row',flexGrow:'0',alignSelf:'auto',alignItems:'normal',justifyContent:'normal',paddingLeft:'0',paddingRight:'0',paddingTop:'0',paddingBottom:'0',borderLeftWidth:'0',borderRightWidth:'0',borderTopWidth:'0',borderBottomWidth:'0',rowGap:'normal',columnGap:'normal',order:'0',flexWrap:'nowrap'};
 const guid = id => ({sessionID:0,localID:id});
-function setup(spaced=false) {
+function setup(spaced=false, options={}) {
   const elements = new Map();
   function element(id, tagName, style, width='auto',height='auto') {
     const el = {id,tagName,childNodes:[],namespaceURI:'http://www.w3.org/1999/xhtml',style:{getPropertyValue:()=>''},css:{...defaults,...style},getAttribute:()=>null,computedStyleMap:()=>new Map([['width',width],['height',height]]),domIndex:elements.size,compareDocumentPosition(other){return this.domIndex<other.domIndex?4:2}};
@@ -22,6 +22,8 @@ function setup(spaced=false) {
   const row=element('row','DIV',{display:'flex',alignItems:'center',columnGap:'12',paddingLeft:'20',paddingRight:'20'},'100%');
   const button=element('button','BUTTON',{display:'inline-block',paddingLeft:'16',paddingRight:'16',paddingTop:'8',paddingBottom:'8'});
   const content=element('content','DIV',{display:'flex',flexDirection:'column',flexGrow:'1',rowGap:'8'});
+  if(options.margins){button.css.marginTop='12px';button.css.marginBottom='8px';button.computedStyleMap=()=>new Map([['width','80px'],['height','40px']]);}
+  if(options.maximum)content.css.maxWidth='100px';
   const nodes=[
     {guid:guid(0),type:'DOCUMENT',name:'Document'},
     {guid:guid(1),type:'CANVAS',name:'Canvas',parentIndex:{guid:guid(0),position:'!'}},
@@ -30,6 +32,7 @@ function setup(spaced=false) {
   ];
   const entries=[[3,'body','body'],[4,'row','div'],[5,'button','button'],[6,'button::text[0]','#text'],[7,'content','div'],[8,'content::text[0]','#text']].map(([id,domPath,tag])=>({guid:guid(id),domPath:domPath==='body'?':scope':domPath,tag,kind:tag==='#text'?'text':'frame',rect:{x:0,y:0,width:100,height:24}}));
   if (spaced) entries.find(entry=>entry.guid.localID===7).rect.x=128;
+  if(options.margins){nodes.find(n=>n.guid.localID===5).size={x:80,y:40};entries.find(e=>e.guid.localID===5).rect={x:20,y:12,width:80,height:40};}
   const result={document:{nodeChanges:nodes,blobs:[]},trace:{rootGuid:guid(2),entries}};
   exports.applyFigmaAutoLayout(root,result);
   const decoded=decodeFigmaData(encodeFigmaData(result.document).figBytes).message.nodeChanges;
@@ -62,4 +65,23 @@ test('unequal spacing becomes padding on a hugging stack instead of absolute chi
 test('paragraph text fills its nested column and grows vertically for wrapping',()=>{
   const paragraph=setup().find(n=>n.type==='TEXT'&&n.textData.characters==='paragraph');
   assert.equal(paragraph.textAutoResize,'HEIGHT');assert.equal(paragraph.stackChildAlignSelf,'STRETCH');
+});
+
+test('positive cross-axis margins become native padding around fixed-size content',()=>{
+  const nodes=setup(false,{margins:true});const wrapper=nodes.find(n=>n.name==='Margins / button');const button=nodes.find(n=>n.name==='button');
+  assert.ok(wrapper);assert.equal(wrapper.stackMode,'HORIZONTAL');
+  assert.equal(wrapper.stackVerticalPadding,12);assert.equal(wrapper.stackPaddingBottom,8);
+  assert.deepEqual(wrapper.size,{x:80,y:60});assert.deepEqual(button.size,{x:80,y:40});
+  assert.deepEqual(button.parentIndex.guid,wrapper.guid);assert.equal(button.stackChildAlignSelf,'AUTO');
+});
+
+test('a flex child already at its CSS maximum width cannot grow beyond that width',()=>{
+  const content=setup(false,{maximum:true}).find(n=>n.name==='content');
+  assert.equal(content.stackChildPrimaryGrow,0);assert.equal(content.size.x,100);
+});
+
+test('the captured viewport keeps a fixed height even when the DOM mount has no flow content',()=>{
+  const root=setup().find(n=>n.guid.localID===2);
+  assert.equal(root.stackPrimarySizing,'FIXED');assert.equal(root.stackCounterSizing,'FIXED');
+  assert.deepEqual(root.size,{x:600,y:300});
 });

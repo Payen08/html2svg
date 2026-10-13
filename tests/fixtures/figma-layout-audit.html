@@ -1,0 +1,41 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Figma 自适应布局核对</title><style>body{margin:24px;font:14px system-ui;background:#f4f5f8}button{padding:10px 18px}pre{white-space:pre-wrap}iframe{border:0;width:1080px;height:1920px;transform:scale(.32);transform-origin:top left}.preview{width:346px;height:615px;overflow:hidden}textarea{width:100%;height:70px}</style></head><body><h1>真实页面自适应布局核对</h1><button id="verify">检查导出尺寸</button><button id="copy">复制自适应验证结果</button><pre id="result" role="status">加载快照…</pre><textarea id="data" hidden></textarea><div class="preview"><iframe id="preview" sandbox="allow-same-origin"></iframe></div><script type="module">
+import{convertPageToFigma,copyFigmaToClipboard}from'/services/figmaClipboardService.ts';
+import{encodeFigmaData,decodeFigmaData}from'@figit/fig-kiwi';
+const path=new URL(location.href).searchParams.get('path');
+let source;
+try{
+ const html=await fetch('/api/read-local-file?path='+encodeURIComponent(path)).then(r=>{if(!r.ok)throw Error('快照读取失败');return r.text()});
+ const doc=new DOMParser().parseFromString(html,'text/html');doc.querySelectorAll('script,noscript,base').forEach(n=>n.remove());
+ const base=doc.createElement('base');base.href=location.origin+'/proxy/8443/';doc.head.prepend(base);
+ source={html:'<!doctype html>'+doc.documentElement.outerHTML,baseUrl:base.href,width:1080,height:1920};
+ document.querySelector('#preview').srcdoc=source.html;
+ document.querySelector('#result').textContent='准备就绪';
+}catch(e){document.querySelector('#result').textContent='FAIL: '+e.message}
+document.querySelector('#verify').onclick=async()=>{
+ try{
+ const result=await convertPageToFigma(source,'Kiosk 自适应验证','auto');
+ const encoded=encodeFigmaData(result.document);const nodes=decodeFigmaData(encoded.figBytes).message.nodeChanges;
+ const byId=new Map(nodes.map(n=>[n.guid.localID,n]));
+ const frames=result.trace.entries.map(t=>{const n=byId.get(t.guid.localID);if(!n||n.type!=='FRAME')return null;return{path:t.domPath,tag:t.tag,rect:t.rect,size:n.size,mode:n.stackMode,primary:n.stackPrimarySizing,cross:n.stackCounterSizing,grow:n.stackChildPrimaryGrow,self:n.stackChildAlignSelf,padding:[n.stackVerticalPadding,n.stackPaddingRight,n.stackPaddingBottom,n.stackHorizontalPadding],gap:n.stackSpacing,justify:n.stackPrimaryAlignItems,align:n.stackCounterAlignItems,gridRows:n.gridRowsSizing,gridCols:n.gridColumnsSizing,gridRowGap:n.gridRowGap,gridColumnGap:n.gridColumnGap,childSizes:nodes.filter(c=>c.parentIndex?.guid.localID===n.guid.localID).map(c=>({id:c.guid.localID,type:c.type,size:c.size,grow:c.stackChildPrimaryGrow,self:c.stackChildAlignSelf,position:c.stackPositioning,mode:c.stackMode,primary:c.stackPrimarySizing,cross:c.stackCounterSizing}))}}).filter(Boolean);
+ const data={root:nodes.find(n=>n.guid.localID===result.trace.rootGuid.localID),frames,nodes,traces:result.trace.entries};
+ document.querySelector('#data').value=JSON.stringify(data);
+ const previewDoc=document.querySelector('#preview').contentDocument;
+ const elementFor=f=>f.path===':scope'?previewDoc.body:previewDoc.body.querySelector(f.path);
+ const cards=frames.filter(f=>elementFor(f)?.classList.contains('item-card'));
+ const iconBoxes=frames.filter(f=>elementFor(f)?.classList.contains('item-icon'));
+ const banner=frames.find(f=>elementFor(f)?.classList.contains('eco-banner'));
+ let checks;
+ if(cards.length&&iconBoxes.length&&banner){
+  const bannerId=result.trace.entries.find(t=>t.domPath===banner.path).guid.localID;
+  const bannerNode=byId.get(bannerId),margin=byId.get(bannerNode.parentIndex.guid.localID);
+  checks={viewportFixed:data.root.size.x===1080&&data.root.size.y===1920&&data.root.stackPrimarySizing==='FIXED',
+   sixCards:cards.length===6&&cards.every(f=>Math.abs(f.size.y-220)<.01),
+   fixedCenteredIcons:iconBoxes.length===6&&iconBoxes.every(f=>f.mode==='HORIZONTAL'&&f.primary==='FIXED'&&f.cross==='FIXED'&&f.justify==='CENTER'&&f.align==='CENTER'&&f.childSizes.every(c=>c.grow===0&&c.self!=='STRETCH'&&c.size.x===50&&c.size.y===50)),
+   bannerMargins:margin.stackHorizontalPadding===56&&margin.stackPaddingRight===56&&Math.abs(margin.size.x-112-banner.size.x)<.01};
+  if(Object.values(checks).some(value=>!value))throw Error('真实页面布局回归失败: '+JSON.stringify(checks));
+ }
+ document.querySelector('#result').textContent=JSON.stringify({passed:checks?Object.values(checks).every(Boolean):null,checks,frames:frames.length,nativeTexts:nodes.filter(n=>n.type==='TEXT').length,autoLayouts:frames.filter(n=>n.mode!=='NONE').length,rootSize:data.root.size},null,2);
+ }catch(e){document.querySelector('#result').textContent='FAIL: '+e.message}
+};
+document.querySelector('#copy').onclick=async()=>{try{await copyFigmaToClipboard(source,'Kiosk 自适应验证','auto');document.querySelector('#result').textContent+='\nFigma 验证数据已复制';}catch(e){document.querySelector('#result').textContent='FAIL: '+e.message}};
+</script></body></html>

@@ -8,6 +8,7 @@ import { expandSvgUses } from './svgUseService';
 import type { FigmaCopySource } from '../types';
 import { createExportAssetLoader } from './exportAssetService';
 import { FIGMA_TEXT_FONT, applyFigmaTextFont, normalizePingFangNames, pingFangWeight } from './figmaTextFontService';
+import type { ConvertResult } from '@figit/dom-to-figma';
 
 const fontFiles = new Map<number, Promise<ArrayBuffer>>();
 function loadPingFangFile(weight: number): Promise<ArrayBuffer> {
@@ -63,7 +64,7 @@ export function writeRichClipboard(html: string): void {
     }
 }
 
-export async function prepareFigmaClipboard(source: FigmaCopySource, name = 'Captured page', layout: FigmaLayoutMode = 'preserve'): Promise<string> {
+export async function convertPageToFigma(source: FigmaCopySource, name = 'Captured page', layout: FigmaLayoutMode = 'auto'): Promise<ConvertResult> {
     const iframe = document.createElement('iframe');
     iframe.setAttribute('sandbox', 'allow-same-origin');
     iframe.style.cssText = `position:fixed;left:0;top:0;width:${source.width}px;height:${source.height}px;opacity:0;pointer-events:none;border:0;z-index:-9999`;
@@ -112,7 +113,6 @@ export async function prepareFigmaClipboard(source: FigmaCopySource, name = 'Cap
         const tablePlans = layout === 'auto' ? prepareFigmaTables(liveDoc) : [];
 
         const { createFigmaConverter, createFontsourceLoader } = await import('@figit/dom-to-figma');
-        const { encodeFigmaData, composeClipboardHtml } = await import('@figit/fig-kiwi');
         const iconFontLoader = createFontsourceLoader();
         const fontErrors: string[] = [];
         const result = await createFigmaConverter({
@@ -150,13 +150,19 @@ export async function prepareFigmaClipboard(source: FigmaCopySource, name = 'Cap
             preserveFigmaLayout(liveDoc.body, result, source.width, source.height);
         }
         normalizePingFangNames(result.document.nodeChanges);
-        return composeClipboardHtml(encodeFigmaData(result.document).base64);
+        return result;
     } finally {
         iframe.remove();
     }
 }
 
-export async function copyFigmaToClipboard(source: FigmaCopySource, name?: string, layout: FigmaLayoutMode = 'preserve'): Promise<void> {
+export async function prepareFigmaClipboard(source: FigmaCopySource, name = 'Captured page', layout: FigmaLayoutMode = 'auto'): Promise<string> {
+    const result = await convertPageToFigma(source, name, layout);
+    const { encodeFigmaData, composeClipboardHtml } = await import('@figit/fig-kiwi');
+    return composeClipboardHtml(encodeFigmaData(result.document).base64);
+}
+
+export async function copyFigmaToClipboard(source: FigmaCopySource, name?: string, layout: FigmaLayoutMode = 'auto'): Promise<void> {
     let variants = prepared.get(source);
     if (!variants) {
         variants = new Map();

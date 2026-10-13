@@ -17,7 +17,7 @@ import {prepareFigmaClipboard} from '/services/figmaClipboardService.ts';
 import {decodeFigmaData,parseClipboardHtml} from '@figit/fig-kiwi';
 try {
   const source={html:'<!doctype html><html><head>'+document.querySelector('style').outerHTML+'</head><body>'+document.querySelector('#sample').outerHTML+'</body></html>',baseUrl:location.href,width:1080,height:1920};
-  const payload=await prepareFigmaClipboard(source,'竖屏布局验证');
+  const payload=await prepareFigmaClipboard(source,'竖屏布局验证','preserve');
   const nodes=decodeFigmaData(parseClipboardHtml(payload).fig).message.nodeChanges;
   const root=nodes.find(n=>n.type==='FRAME'&&n.parentIndex?.guid.localID===1);
   const scaledText=nodes.find(n=>n.type==='TEXT'&&n.textData?.characters==='小型電子');

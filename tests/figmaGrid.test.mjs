@@ -16,3 +16,17 @@ test('two fractional CSS grid maps share native tracks and stay Fill rather than
  assert.ok(grid.gridColumnsSizing.entries.every(e=>e.trackSize.maxSizing.type==='FLEX'));assert.equal(grid.gridRowsSizing.entries[0].trackSize.maxSizing.type,'HUG');
  const maps=ns.filter(n=>n.name==='Map');assert.deepEqual(maps[0].gridRowAnchor,maps[1].gridRowAnchor);assert.notDeepEqual(maps[0].gridColumnAnchor,maps[1].gridColumnAnchor);assert.ok(maps.every(n=>n.stackChildPrimaryGrow===1&&n.stackChildAlignSelf==='STRETCH'));
 });
+
+test('a centered 50px SVG stays fixed inside a 90px icon container after encoding',()=>{
+ const guid=id=>({sessionID:0,localID:id});
+ const cell={namespaceURI:'http://www.w3.org/1999/xhtml',computedStyleMap:()=>new Map([['width','90px'],['height','90px']]),css:{display:'grid',gridTemplateColumns:'90px',justifyItems:'center',alignItems:'center',columnGap:'0',rowGap:'0'}};
+ const icon={namespaceURI:'http://www.w3.org/2000/svg',computedStyleMap:()=>new Map([['width','50px'],['height','50px']]),css:{display:'block',justifySelf:'auto',alignSelf:'auto'}};
+ const root={querySelector:p=>p==='.icon'?icon:cell,ownerDocument:{defaultView:{getComputedStyle:e=>e.css}}};
+ const nodes=[{guid:guid(2),type:'FRAME',name:'Icon container',size:{x:90,y:90},stackMode:'VERTICAL'}, {guid:guid(3),type:'FRAME',name:'SVG',size:{x:50,y:50},stackMode:'NONE',stackChildPrimaryGrow:1,stackChildAlignSelf:'STRETCH',parentIndex:{guid:guid(2),position:'0'}}];
+ const result={document:{nodeChanges:nodes,blobs:[]},trace:{entries:[{guid:guid(2),tag:'span',domPath:'.cell'},{guid:guid(3),tag:'svg',domPath:'.icon'}]}};
+ exports.applyFigmaGridLayout(root,result);
+ const decoded=decodeFigmaData(encodeFigmaData(result.document).figBytes).message.nodeChanges;const box=decoded[0],svg=decoded[1];
+ assert.equal(box.stackMode,'HORIZONTAL');assert.equal(box.stackPrimarySizing,'FIXED');assert.equal(box.stackCounterSizing,'FIXED');
+ assert.equal(box.stackPrimaryAlignItems,'CENTER');assert.equal(box.stackCounterAlignItems,'CENTER');
+ assert.deepEqual(svg.size,{x:50,y:50});assert.equal(svg.stackChildPrimaryGrow,0);assert.equal(svg.stackChildAlignSelf,'AUTO');
+});
