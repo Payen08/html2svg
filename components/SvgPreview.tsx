@@ -3,7 +3,7 @@ import { Download, Copy, Check, ZoomIn, ZoomOut, Maximize, Move, Grid3X3, Sun, M
 import { Button } from './Button';
 import { PageItem, FigmaCopySource } from '../types';
 import { copySvgToClipboard } from '../services/svgClipboardService';
-import { copyFigmaToClipboard } from '../services/figmaClipboardService';
+import { copyFigmaToClipboard, type FigmaLayoutMode } from '../services/figmaClipboardService';
 
 interface SvgPreviewProps {
   svgContent: string | null;
@@ -22,6 +22,7 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
   const [isCopying, setIsCopying] = useState(false);
   const [figmaCopied, setFigmaCopied] = useState(false);
   const [isFigmaCopying, setIsFigmaCopying] = useState(false);
+  const [figmaLayout, setFigmaLayout] = useState<FigmaLayoutMode>('preserve');
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -40,7 +41,7 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
     setCopied(false);
     setCopyError(null);
     setFigmaCopied(false);
-  }, [effectiveSvgContent]);
+  }, [effectiveSvgContent, figmaLayout]);
 
   useEffect(() => {
     if (!figmaCopied) return;
@@ -85,7 +86,7 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
     setCopied(false);
     setFigmaCopied(false);
     try {
-      await copyFigmaToClipboard(effectiveFigmaSource, activePage?.name || 'Captured page');
+      await copyFigmaToClipboard(effectiveFigmaSource, activePage?.name || 'Captured page', figmaLayout);
       setFigmaCopied(true);
     } catch (error) {
       setCopyError(error instanceof Error ? error.message : '复制 Figma 失败，请重试。');
@@ -265,13 +266,23 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
             </button>
           </div>
 
+          <select
+            aria-label="Figma 布局方式"
+            value={figmaLayout}
+            onChange={event => setFigmaLayout(event.target.value as FigmaLayoutMode)}
+            disabled={isFigmaCopying}
+            className="h-8 rounded bg-gray-800 border border-gray-700 text-gray-300 text-xs px-2"
+          >
+            <option value="preserve">保持原布局</option>
+            <option value="auto">自适应布局</option>
+          </select>
           <Button
             variant="secondary"
             onClick={handleCopyFigma}
             isLoading={isFigmaCopying}
             disabled={!effectiveFigmaSource || isCopying}
             className="h-8 px-3 text-xs whitespace-nowrap"
-            title={effectiveFigmaSource ? '复制原生 Figma 图层，文字使用 PingFang SC，支持自动布局' : '请重新捕获或使用 Figma SVG 渲染，保存页面布局后即可复制'}
+            title={effectiveFigmaSource ? (figmaLayout === 'preserve' ? '保留捕获尺寸和图层位置，文字与图形可编辑' : '转换为自适应布局，复杂页面的位置和换行可能变化') : '请重新捕获或使用 Figma SVG 渲染，保存页面布局后即可复制'}
             icon={figmaCopied ? <Check className="w-4 h-4 text-green-400" /> : <Figma className="w-4 h-4" />}
           >
             {isFigmaCopying ? '准备 Figma…' : figmaCopied ? 'Figma 已复制' : '复制 Figma'}

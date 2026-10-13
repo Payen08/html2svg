@@ -3,6 +3,7 @@ import { Sparkles, Code, Github, Zap, Cpu, Settings2, Box, ArrowRightLeft, Uploa
 import { Button } from './components/Button';
 import { SvgPreview } from './components/SvgPreview';
 import { HtmlPreview } from './components/HtmlPreview';
+import { InteractiveViewport } from './components/InteractiveViewport';
 import { convertHtmlToSvg } from './services/geminiService';
 import { convertHtmlToSvgLocal, convertSvgToHtmlLocal } from './services/localService';
 import { exportToFigmaJSON } from './services/figmaExportService';
@@ -51,6 +52,7 @@ function App() {
   // Interactive capture state
   const interactiveRef = useRef<InteractiveCaptureHandle | null>(null);
   const interactiveContainerRef = useRef<HTMLDivElement>(null);
+  const [interactiveIframe, setInteractiveIframe] = useState<HTMLIFrameElement | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
   const [isInteractiveReady, setIsInteractiveReady] = useState(false);
   const [interactiveError, setInteractiveError] = useState<string | null>(null);
@@ -485,16 +487,6 @@ function App() {
     setViewportH(clampViewportSize(Number(value)));
   };
 
-  const fitInteractiveViewport = () => {
-    const handle = interactiveRef.current;
-    const container = interactiveContainerRef.current;
-    if (!handle || !container?.clientWidth) return;
-    const width = Number(handle.iframe.getAttribute('width')) || viewportW;
-    const scale = width > container.clientWidth ? Math.max(0.1, (container.clientWidth - 32) / width) : 1;
-    handle.iframe.style.transform = `scale(${scale})`;
-    handle.iframe.style.transformOrigin = 'top center';
-  };
-
   const resizeInteractiveViewport = (width = viewportW, height = viewportH) => {
     const w = clampViewportSize(width);
     const h = clampViewportSize(height);
@@ -502,7 +494,6 @@ function App() {
     setViewportH(h);
     setIsViewportCustom(true);
     interactiveRef.current?.resize(w, h);
-    fitInteractiveViewport();
   };
 
   const startInteractivePreview = (forceAutoViewport = false) => {
@@ -543,7 +534,7 @@ function App() {
   useEffect(() => {
     if (renderMode !== RenderMode.INTERACTIVE) return;
     if (!pendingInteractiveUrlRef.current) return;
-    if (interactiveRef.current?.iframe.isConnected) { fitInteractiveViewport(); return; }
+    if (interactiveRef.current?.iframe.isConnected) return;
     interactiveRef.current = null;
 
     const url = pendingInteractiveUrlRef.current;
@@ -576,34 +567,16 @@ function App() {
       const handle = createInteractiveCapture(finalUrl, baseUrl, viewport.width, viewport.height);
       interactiveRef.current = handle;
 
-      // Auto-fit: if iframe is wider than container, scale it down
-      const containerWidth = interactiveContainerRef.current.clientWidth;
-      const scale = containerWidth > 0 && viewport.width > containerWidth
-        ? Math.max(0.25, (containerWidth - 32) / viewport.width)
-        : 1;
-
-      // Center iframe in container (like Chrome DevTools device preview)
       handle.iframe.style.display = 'block';
-      handle.iframe.style.margin = '0 auto';
       handle.iframe.style.boxShadow = '0 4px 24px rgba(0,0,0,0.3)';
       handle.iframe.style.borderRadius = '4px';
-      handle.iframe.style.transform = `scale(${scale})`;
-      handle.iframe.style.transformOrigin = 'top center';
-
-      // Adjust container to account for scaled height
-      if (scale < 1) {
-        interactiveContainerRef.current.style.overflow = 'hidden';
-      }
-
-      interactiveContainerRef.current.innerHTML = '';
-      interactiveContainerRef.current.appendChild(handle.iframe);
+      setInteractiveIframe(handle.iframe);
       setIsInteractiveReady(true);
     }, 100);
 
     return () => clearTimeout(timer);
   }, [renderMode, interactiveSessionKey]);
 
-  useEffect(() => { fitInteractiveViewport(); }, [leftPanelRatio, renderMode]);
   useEffect(() => () => {
     interactiveRef.current?.destroy();
     interactiveRef.current = null;
@@ -669,6 +642,7 @@ function App() {
       interactiveRef.current.destroy();
       interactiveRef.current = null;
     }
+    setInteractiveIframe(null);
     setIsInteractiveReady(false);
   };
 
@@ -1263,6 +1237,7 @@ function App() {
                       { label: 'HD', w: 1280, h: 720 },
                       { label: 'QHD', w: 1440, h: 900 },
                       { label: 'FHD', w: 1920, h: 1080 },
+                      { label: '竖屏', w: 1080, h: 1920 },
                     ].map(p => (
                       <button
                         key={p.label}
@@ -1309,11 +1284,7 @@ function App() {
                 </div>
               </div>
               {/* Interactive iframe */}
-              <div
-                ref={interactiveContainerRef}
-                className="flex-1 bg-gray-200 overflow-auto flex justify-center"
-                style={{ padding: '16px 0' }}
-              />
+              <InteractiveViewport iframe={interactiveIframe} viewportRef={interactiveContainerRef} />
             </div>
           )}
           {isHtmlToSvg && renderMode !== RenderMode.INTERACTIVE ? (

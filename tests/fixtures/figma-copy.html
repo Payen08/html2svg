@@ -25,7 +25,7 @@
           html: '<!DOCTYPE html><html><body style="margin:0">' + document.querySelector('#sample').outerHTML + '</body></html>',
           baseUrl: location.href, width: 600, height: 360,
         };
-        payload = await prepareFigmaClipboard(source, 'PingFang SC 复制验证');
+        payload = await prepareFigmaClipboard(source, 'PingFang SC 复制验证', 'auto');
         const decoded = decodeFigmaData(parseClipboardHtml(payload).fig);
         const nodes = decoded.message.nodeChanges;
         const texts = nodes.filter(node => node.type === 'TEXT');
@@ -60,7 +60,7 @@
       } catch (error) { status.textContent = 'FAIL: ' + error.message; }
     };
     document.querySelector('#copy').onclick = async () => {
-      await copyFigmaToClipboard(source, 'PingFang SC 复制验证');
+      await copyFigmaToClipboard(source, 'PingFang SC 复制验证', 'auto');
       document.querySelector('#result').textContent += '\n已复制，可以在 Figma 粘贴';
     };
   </script>

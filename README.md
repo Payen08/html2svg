@@ -15,15 +15,17 @@ View your app in AI Studio: https://ai.studio/apps/drive/1rIVo2rGZHZvb5hFsAdC-Q8
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Run the app:
    `npm run dev`
+
+Local conversion and page capture do not require an API key. For AI conversion, create `.env.local` in the project root and set `VITE_GEMINI_API_KEY` to your Gemini API key, then restart the development server. The legacy `GEMINI_API_KEY` name is also supported; `VITE_GEMINI_API_KEY` takes precedence when both are set. Missing keys are reported when AI conversion is requested and do not prevent the app from opening.
 
 ## Capture and copy to Figma
 
 - Enter a URL to open the interactive preview, navigate to the desired screen, then capture it. Changing the preview size preserves the current page.
+- The interactive preview fits the full viewport initially. Use the zoom buttons, **100%**, or **适应窗口** to change the display scale. Scroll to reach enlarged content; enable **拖动画布** to pan, then switch it off to interact with the page. Ctrl/⌘ + wheel also zooms. Display zoom does not change capture dimensions.
 - Use **输入 HTML** to render HTML directly.
-- **复制 Figma** copies native editable layers, including Auto Layout containers and shared Grid tracks for tables and CSS grids. **复制 SVG** copies SVG markup separately.
+- **复制 Figma** defaults to **保持原布局**: native editable layers keep their captured viewport and fixed positions, avoiding paste-time reflow. Choose **自适应布局** to generate Auto Layout containers and shared Grid tracks for tables and CSS grids; this can change complex layouts. **复制 SVG** copies SVG markup separately.
 - Text uses PingFang SC. Native Figma copying currently requires the local Vite server on macOS with PingFang installed; static hosting does not provide the local font/proxy endpoints.
 - SVG map canvases containing embedded images are preserved as image layers; surrounding text, buttons and layout containers stay editable.
 

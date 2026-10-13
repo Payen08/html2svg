@@ -1,9 +1,7 @@
-import { GoogleGenAI } from "@google/genai";
-
-// Initialize the client with Vite's environment variable
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+import { getGeminiClient } from './geminiClient';
 
 export const convertHtmlToSvg = async (htmlInput: string, optimize: boolean = false): Promise<string> => {
+  const ai = getGeminiClient();
   try {
     const optimizationInstructions = optimize
       ? `

@@ -1,7 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
-
-// Initialize the client with Vite's environment variable
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+import { getGeminiClient } from './geminiClient';
 
 export type CssFramework = 'vanilla' | 'tailwind';
 
@@ -9,6 +6,7 @@ export const convertSvgToHtml = async (
     svgInput: string,
     framework: CssFramework = 'vanilla'
 ): Promise<{ html: string; css: string }> => {
+    const ai = getGeminiClient();
     try {
         const frameworkInstructions = framework === 'tailwind'
             ? `
