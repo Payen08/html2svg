@@ -1,0 +1,11 @@
+<!doctype html><html><meta charset="utf-8"><title>真实弹窗控件验收</title><style>body{margin:0}#tools{height:60px;display:flex;gap:12px;align-items:center;padding:0 12px}iframe{width:100vw;height:calc(100vh - 60px);border:0}pre{font:12px system-ui}textarea[hidden]{display:none}</style><div id="tools"><button id="capture">捕获并验证控件</button><pre id="status">等待弹窗</pre></div><iframe id="page"></iframe><textarea id="payload" hidden></textarea><textarea id="audit" hidden></textarea><script type="module">
+import{serializeCaptureDocument}from'/services/captureSnapshot.ts';
+import{convertPageToFigma,prepareFigmaClipboard}from'/services/figmaClipboardService.ts';
+const target=new URL(location.href).searchParams.get('target');document.querySelector('#page').src=target;
+document.querySelector('#capture').onclick=async()=>{try{
+const frame=document.querySelector('#page'),doc=frame.contentDocument;const snapshot=serializeCaptureDocument(doc);const source={html:snapshot.html,baseUrl:doc.URL,width:frame.clientWidth,height:frame.clientHeight};
+const result=await convertPageToFigma(source,'真实地图拉取弹窗','auto');document.querySelector('#audit').value=JSON.stringify({traces:result.trace,nodes:result.document.nodeChanges});
+const texts=result.document.nodeChanges.filter(n=>n.type==='TEXT').map(n=>n.textData?.characters);const checkboxCount=result.document.nodeChanges.filter(n=>n.name==='Checkbox / unchecked').length;const selectCount=texts.filter(t=>t==='mcr机器人 · MCR-001 · 在线').length;const title=texts.includes('从机器人拉取地图');const selected=texts.includes('mcr机器人 · MCR-001 · 在线');
+document.querySelector('#payload').value=await prepareFigmaClipboard(source,'真实地图拉取弹窗','auto');document.querySelector('#status').textContent=JSON.stringify({passed:title&&selected&&checkboxCount===4&&selectCount===1&&!texts.includes('百川机器人 · BC-002 · 在线'),title,selected,checkboxCount,selectCount,nodes:result.document.nodeChanges.length,texts});
+}catch(e){document.querySelector('#status').textContent='FAIL '+e.message}};
+</script></html>

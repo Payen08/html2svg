@@ -47,3 +47,14 @@ test('unreadable or loading full-page frames fail explicitly instead of capturin
     loading.readyState = 'loading';
     assert.throws(() => selectCaptureDocument(documentWith([frameWith(loading)])), /尚未加载完成/);
 });
+
+test('snapshots keep current form values and mask password fields',()=>{
+    const inputs=[{tagName:'INPUT',type:'text',value:'当前输入'},{tagName:'INPUT',type:'password',value:'private-password'}];
+    const copies=inputs.map(input=>({tagName:input.tagName,values:new Map([['type',input.type]]),setAttribute(name,value){this.values.set(name,value)},getAttribute(name){return this.values.get(name)},get attributes(){return [...this.values].map(([name,value])=>({name,value}))}}));
+    const clone={querySelectorAll(selector){return selector==='input, textarea, select'||selector==='*'?copies:[]},get outerHTML(){return '<html><body>'+copies.map(copy=>'<input '+[...copy.values].map(([name,value])=>name+'="'+value+'"').join(' ')+'>').join('')+'</body></html>'}};
+    const source={documentElement:{cloneNode:()=>clone},querySelectorAll:()=>inputs,defaultView:null,URL:'https://example.com/form',baseURI:'https://example.com/form'};
+    const snapshot=exports.serializeCaptureDocument(source);
+    assert.match(snapshot.html,/当前输入/);assert.ok(!snapshot.html.includes('private-password'));
+    assert.equal(copies[1].getAttribute('value'),'•'.repeat(inputs[1].value.length));
+    assert.equal(snapshot.url,source.URL);
+});

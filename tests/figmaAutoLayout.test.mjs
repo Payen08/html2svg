@@ -24,6 +24,9 @@ function setup(spaced=false, options={}) {
   const content=element('content','DIV',{display:'flex',flexDirection:'column',flexGrow:'1',rowGap:'8'});
   if(options.margins){button.css.marginTop='12px';button.css.marginBottom='8px';button.computedStyleMap=()=>new Map([['width','80px'],['height','40px']]);}
   if(options.maximum)content.css.maxWidth='100px';
+  if(options.shrinkable){content.css.flexGrow='0';content.css.flexShrink='1';row.children=[button,content];}
+  if(options.captured){button.getAttribute=name=>name==='data-html2svg-sizing-width'?'auto':null;button.computedStyleMap=()=>new Map([['width','100px'],['height','auto']]);}
+  if (options.variant === 'inline') { row.css.display = 'block'; content.css.display = 'inline-block'; }
   const nodes=[
     {guid:guid(0),type:'DOCUMENT',name:'Document'},
     {guid:guid(1),type:'CANVAS',name:'Canvas',parentIndex:{guid:guid(0),position:'!'}},
@@ -33,6 +36,7 @@ function setup(spaced=false, options={}) {
   const entries=[[3,'body','body'],[4,'row','div'],[5,'button','button'],[6,'button::text[0]','#text'],[7,'content','div'],[8,'content::text[0]','#text']].map(([id,domPath,tag])=>({guid:guid(id),domPath:domPath==='body'?':scope':domPath,tag,kind:tag==='#text'?'text':'frame',rect:{x:0,y:0,width:100,height:24}}));
   if (spaced) entries.find(entry=>entry.guid.localID===7).rect.x=128;
   if(options.margins){nodes.find(n=>n.guid.localID===5).size={x:80,y:40};entries.find(e=>e.guid.localID===5).rect={x:20,y:12,width:80,height:40};}
+  if (options.variant === 'border') nodes.push({guid:guid(30),type:'VECTOR',name:'Generated border',size:{x:100,y:24},parentIndex:{guid:guid(5),position:'30'}});
   const result={document:{nodeChanges:nodes,blobs:[]},trace:{rootGuid:guid(2),entries}};
   exports.applyFigmaAutoLayout(root,result);
   const decoded=decodeFigmaData(encodeFigmaData(result.document).figBytes).message.nodeChanges;
@@ -84,4 +88,24 @@ test('the captured viewport keeps a fixed height even when the DOM mount has no 
   const root=setup().find(n=>n.guid.localID===2);
   assert.equal(root.stackPrimarySizing,'FIXED');assert.equal(root.stackCounterSizing,'FIXED');
   assert.deepEqual(root.size,{x:600,y:300});
+});
+
+test('generated border vectors stay absolute and do not participate in button Auto Layout',()=>{
+  const nodes=setup(false,{variant:'border'});const border=nodes.find(n=>n.name==='Generated border');
+  assert.equal(border.stackPositioning,'ABSOLUTE');
+  assert.equal(nodes.find(n=>n.name==='button').stackSpacing,0);
+});
+test('inline siblings in a block become a nested responsive horizontal control row',()=>{
+  const nodes=setup(true,{variant:'inline'});const row=nodes.find(n=>n.name==='Inline controls');
+  assert.ok(row);assert.equal(row.stackMode,'HORIZONTAL');assert.equal(row.stackWrap,'WRAP');assert.equal(row.stackChildAlignSelf,'STRETCH');
+  const button=nodes.find(n=>n.name==='button'),content=nodes.find(n=>n.name==='content');
+  assert.deepEqual(button.parentIndex.guid,row.guid);assert.deepEqual(content.parentIndex.guid,row.guid);
+  assert.equal(button.stackPositioning,'AUTO');assert.equal(content.stackPositioning,'AUTO');
+});
+
+test('captured sizing metadata preserves Hug despite frozen pixel width',()=>{
+ const button=setup(false,{captured:true}).find(n=>n.name==='button');assert.equal(button.stackPrimarySizing,'RESIZE_TO_FIT');
+});
+test('one shrinkable text column beside a fixed control fills remaining width and wraps text',()=>{
+ const nodes=setup(false,{shrinkable:true});assert.equal(nodes.find(n=>n.name==='content').stackChildPrimaryGrow,1);assert.equal(nodes.find(n=>n.name==='paragraph').textAutoResize,'HEIGHT');
 });

@@ -10,6 +10,8 @@ const align = (value: string) => /center/.test(value) ? 'CENTER' : /end|right/.t
 
 /** Typed OM preserves auto/percent sizes, unlike getComputedStyle's resolved pixels. */
 function declaredSize(element: Element, axis: 'width' | 'height'): string {
+    const captured = element.getAttribute(`data-html2svg-sizing-${axis}`);
+    if (captured) return captured;
     const typed = (element as HTMLElement & { computedStyleMap?: () => Map<string, unknown> }).computedStyleMap?.().get(axis);
     return typed?.toString() || (element as HTMLElement).style?.getPropertyValue(axis) || 'auto';
 }
@@ -56,6 +58,7 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
         const directText = node.type === 'TEXT' && traces.get(guidKey(node.guid))?.tag === '#text';
         if (directText && element === parent) {
             if (axis === 'height') return 'HUG';
+            if (/^(INPUT|TEXTAREA)$/.test(element.tagName)) return 'FILL';
             if (/^(block|table-cell)$/.test(style.display) ||
                 (style.display.includes('flex') && style.flexDirection.startsWith('column') && /stretch|normal/.test(style.alignItems))) return 'FILL';
             return 'HUG';
@@ -70,7 +73,17 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
         const parentStyle = parent && styleOf(parent);
         if (parentStyle?.display.includes('flex')) {
             const mainAxis = parentStyle.flexDirection.startsWith('row') ? 'width' : 'height';
-            if (axis === mainAxis) return px(style.flexGrow) > 0 ? 'FILL' : 'HUG';
+            if (axis === mainAxis) {
+                // A sole shrinkable text column beside fixed icons needs the
+                // remaining row width, so long labels can wrap after resizing.
+                const textColumn = axis === 'width' && style.display.includes('flex') && style.flexDirection.startsWith('column') && px(style.flexShrink) > 0 &&
+                    /^(normal|flex-start|start)$/.test(parentStyle.justifyContent) &&
+                    Array.from(parent!.children || []).filter(child => {
+                        const css = styleOf(child);
+                        return css.display.includes('flex') && css.flexDirection.startsWith('column');
+                    }).length === 1;
+                return px(style.flexGrow) > 0 || textColumn ? 'FILL' : 'HUG';
+            }
             const selfAlign = style.alignSelf === 'auto' ? parentStyle.alignItems : style.alignSelf;
             return /stretch|normal/.test(selfAlign) ? 'FILL' : 'HUG';
         }
@@ -108,7 +121,9 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
         const parentElement = node.parentIndex && elements.get(guidKey(node.parentIndex.guid));
         const flow = childNodes.filter(child => {
             const childElement = elements.get(guidKey(child.guid));
-            return !childElement || childElement === element || !/^(absolute|fixed)$/.test(styleOf(childElement).position);
+            // Exporter-generated border vectors are decorations, never stack items.
+            if (!childElement) return child.type === 'TEXT';
+            return childElement === element || !/^(absolute|fixed)$/.test(styleOf(childElement).position);
         });
         const grid = style.display.includes('grid');
         const row = style.display.includes('flex') ? style.flexDirection.startsWith('row') :
@@ -160,6 +175,48 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
             return aOrder - bOrder || (aNode.compareDocumentPosition(bNode) & 4 ? -1 : 1);
         });
         if (style.flexDirection.endsWith('reverse')) flow.reverse();
+        // Block containers may contain an inline control row (e.g. modal actions).
+        // Preserve that row as a nested horizontal stack instead of piling it up.
+        if (!row && !grid && !style.display.includes('flex')) {
+            const inline = (child: NativeNode) => {
+                const owner = elements.get(guidKey(child.guid));
+                return owner && owner !== element && styleOf(owner).display.startsWith('inline');
+            };
+            for (let start = 0; start < flow.length; start++) {
+                if (!inline(flow[start])) continue;
+                let end = start + 1;
+                while (end < flow.length && inline(flow[end])) end++;
+                if (end - start < 2) continue;
+                const run = flow.slice(start, end);
+                const rects = run.map(child => traces.get(guidKey(child.guid))?.rect);
+                if (rects.some(rect => !rect)) continue;
+                const left = Math.min(...rects.map(rect => rect!.x));
+                const top = Math.min(...rects.map(rect => rect!.y));
+                const right = Math.max(...rects.map(rect => rect!.x + rect!.width));
+                const bottom = Math.max(...rects.map(rect => rect!.y + rect!.height));
+                const gaps = rects.slice(1).map((rect, index) => rect!.x - rects[index]!.x - rects[index]!.width).filter(gap => gap >= 0);
+                const wrapper: NativeNode = {
+                    type: 'FRAME', phase: 'CREATED', guid: {sessionID: node.guid.sessionID, localID: nextId++},
+                    name: 'Inline controls', visible: true, opacity: 1, fillPaints: [], frameMaskDisabled: true,
+                    parentIndex: {guid: node.guid, position: run[0].parentIndex!.position},
+                    size: {x: right - left, y: bottom - top},
+                    stackMode: 'HORIZONTAL', stackWrap: 'WRAP', stackSpacing: gaps.length ? Math.min(...gaps) : 0,
+                    stackCounterSpacing: 4, stackPrimarySizing: 'FIXED', stackCounterSizing: 'RESIZE_TO_FIT',
+                    stackPrimaryAlignItems: 'MIN', stackCounterAlignItems: 'CENTER', stackPositioning: 'AUTO',
+                };
+                const first = traces.get(guidKey(run[0].guid))!;
+                traces.set(guidKey(wrapper.guid), {...first, guid: wrapper.guid, rect: {x: left, y: top, width: right - left, height: bottom - top}});
+                sizingOverrides.set(guidKey(wrapper.guid), {width: 'FILL', height: 'HUG'});
+                run.forEach((child, index) => {child.parentIndex = {guid: wrapper.guid, position: String(index).padStart(6,'0')}; child.stackPositioning = 'AUTO';});
+                flow.splice(start, run.length, wrapper);
+                const insertion = childNodes.indexOf(run[0]);
+                run.forEach(child => { const index = childNodes.indexOf(child); if (index >= 0) childNodes.splice(index, 1); });
+                childNodes.splice(Math.min(insertion, childNodes.length), 0, wrapper);
+                children.set(guidKey(wrapper.guid), run);
+                nodes.push(wrapper);
+            }
+        }
+
         const gap = row ? style.columnGap : style.rowGap;
         const measuredGaps = flow.slice(1).map((child, index) => {
             const previous = traces.get(guidKey(flow[index].guid))?.rect;

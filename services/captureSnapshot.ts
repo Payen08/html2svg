@@ -47,10 +47,89 @@ export function serializeCaptureDocument(source: Document): { html: string; url:
             });
         } else if (['checkbox', 'radio'].includes((field as HTMLInputElement).type)) {
             copy.toggleAttribute('checked', (field as HTMLInputElement).checked);
+            copy.toggleAttribute('data-html2svg-indeterminate', (field as HTMLInputElement).indeterminate);
         } else {
-            copy.setAttribute('value', (field as HTMLInputElement).value);
+            const input = field as HTMLInputElement;
+            copy.setAttribute('value', input.type === 'password' ? '•'.repeat(input.value.length) : input.value);
         }
     });
+    // Modal/popover membership lives in the browser's top layer, not in HTML.
+    // Freeze it into ordinary visible layers before scripts are removed.
+    const view = source.defaultView;
+    if (view) {
+        const originals = Array.from(source.querySelectorAll<HTMLElement>('dialog[open], [popover], [role="dialog"], [aria-modal="true"]'));
+        const copies = Array.from(clone.querySelectorAll<HTMLElement>('dialog[open], [popover], [role="dialog"], [aria-modal="true"]'));
+        let layer = 0;
+        originals.forEach((element, index) => {
+            const copy = copies[index];
+            if (!copy) return;
+            const style = view.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            if (!rect.width || !rect.height || style.display === 'none' || style.visibility === 'hidden') return;
+            const modal = element.matches(':modal');
+            const popover = element.hasAttribute('popover') && element.matches(':popover-open');
+            if (!modal && !popover && style.position !== 'fixed') return;
+            // Keep :modal / :popover-open rules, including descendant styles.
+            const liveNodes = [element, ...Array.from(element.querySelectorAll<HTMLElement>('*'))];
+            const cloneNodes = [copy, ...Array.from(copy.querySelectorAll<HTMLElement>('*'))];
+            liveNodes.forEach((node, offset) => {
+                const computed = view.getComputedStyle(node);
+                const target = cloneNodes[offset];
+                if (!target?.style) return;
+                for (let property = 0; property < computed.length; property++) {
+                    const name = computed[property];
+                    target.style.setProperty(name, computed.getPropertyValue(name), 'important');
+                }
+                // Keep the authored sizing policy separately from the frozen pixel box.
+                // Auto Layout must still distinguish auto/percent from fixed sizes.
+                const typed = (node as HTMLElement & { computedStyleMap?: () => Map<string, unknown> }).computedStyleMap?.();
+                for (const axis of ['width', 'height']) {
+                    const sizing = typed?.get(axis)?.toString();
+                    if (sizing) target.setAttribute(`data-html2svg-sizing-${axis}`, sizing);
+                }
+                target.style.setProperty('animation', 'none', 'important');
+                target.style.setProperty('transition', 'none', 'important');
+            });
+            if (popover) copy.removeAttribute('popover');
+            // A transformed ancestor establishes a fixed-position containing block.
+            // Only viewport-fixed overlays can use screen coordinates directly.
+            let transformedAncestor = false;
+            for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+                const parentStyle = view.getComputedStyle(parent);
+                if (parentStyle.transform !== 'none' || parentStyle.filter !== 'none' || /paint|layout|strict|content/.test(parentStyle.contain)) {
+                    transformedAncestor = true; break;
+                }
+            }
+            if (modal || popover || !transformedAncestor) {
+                const properties: Record<string, string> = {
+                    position: 'fixed', left: `${rect.left}px`, top: `${rect.top}px`,
+                    right: 'auto', bottom: 'auto', width: `${rect.width}px`, height: `${rect.height}px`,
+                    margin: '0', transform: 'none', 'box-sizing': 'border-box',
+                };
+                Object.entries(properties).forEach(([name, value]) => copy.style.setProperty(name, value, 'important'));
+            }
+            if (modal || popover) {
+                const z = 2147483000 + layer++ * 2;
+                copy.style.setProperty('z-index', String(z + 1), 'important');
+                // Top-layer nodes ignore ancestor clipping in the live page.
+                clone.querySelector('body')!.appendChild(copy);
+                const backdropStyle = view.getComputedStyle(element, '::backdrop');
+                const backdrop = source.createElement('div');
+                backdrop.setAttribute('data-html2svg-backdrop', '');
+                backdrop.style.cssText = `position:fixed;inset:0;z-index:${z};pointer-events:none;`;
+                for (const name of ['background-color', 'background-image', 'backdrop-filter', 'opacity']) {
+                    backdrop.style.setProperty(name, backdropStyle.getPropertyValue(name));
+                }
+                copy.before(backdrop);
+            }
+        });
+        // Fixed-only application mounts otherwise have a zero-height body.
+        const body = source.body;
+        const bodyCopy = clone.querySelector<HTMLElement>('body');
+        if (body && bodyCopy && body.getBoundingClientRect().height < view.innerHeight) {
+            bodyCopy.style.setProperty('min-height', `${view.innerHeight}px`);
+        }
+    }
     clone.querySelectorAll('script, noscript, base').forEach(node => node.remove());
     clone.querySelectorAll('*').forEach(node => {
         Array.from(node.attributes).forEach(attr => {

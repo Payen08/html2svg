@@ -1,3 +1,4 @@
+import { prepareFigmaFormControls } from './figmaFormService';
 import { preserveSvgImageLayers } from './figmaSvgImageService';
 import { preserveFigmaLayout } from './figmaPreserveLayoutService';
 import { applyFigmaGridLayout } from './figmaGridService';
@@ -64,7 +65,7 @@ export function writeRichClipboard(html: string): void {
     }
 }
 
-export async function convertPageToFigma(source: FigmaCopySource, name = 'Captured page', layout: FigmaLayoutMode = 'preserve', onProgress?: (message: string) => void): Promise<ConvertResult> {
+export async function convertPageToFigma(source: FigmaCopySource, name = 'Captured page', layout: FigmaLayoutMode = 'auto', onProgress?: (message: string) => void): Promise<ConvertResult> {
     const iframe = document.createElement('iframe');
     iframe.setAttribute('sandbox', 'allow-same-origin');
     iframe.style.cssText = `position:fixed;left:0;top:0;width:${source.width}px;height:${source.height}px;opacity:0;pointer-events:none;border:0;z-index:-9999`;
@@ -89,6 +90,15 @@ export async function convertPageToFigma(source: FigmaCopySource, name = 'Captur
         if (!liveDoc?.body) throw new Error('无法读取页面布局。');
         onProgress?.("处理文字…");
         applyFigmaTextFont(liveDoc);
+        // The converter renders form placeholders; filled fields must use their
+        // current visible value rather than losing text or showing the old hint.
+        liveDoc.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach(field => {
+            if (field.tagName === 'INPUT' && ['checkbox', 'radio', 'submit', 'button', 'file', 'hidden', 'image', 'range', 'color'].includes((field as HTMLInputElement).type)) return;
+            const text = field.tagName === 'INPUT' && (field as HTMLInputElement).type === 'password'
+                ? '•'.repeat(field.value.length) : field.value;
+            if (text) field.setAttribute('placeholder', text);
+        });
+        prepareFigmaFormControls(liveDoc);
         await liveDoc.fonts.ready;
 
         // IMG SVGs become real vectors, while keeping their CSS layout dimensions.
@@ -159,13 +169,13 @@ export async function convertPageToFigma(source: FigmaCopySource, name = 'Captur
     }
 }
 
-export async function prepareFigmaClipboard(source: FigmaCopySource, name = 'Captured page', layout: FigmaLayoutMode = 'preserve', onProgress?: (message: string) => void): Promise<string> {
+export async function prepareFigmaClipboard(source: FigmaCopySource, name = 'Captured page', layout: FigmaLayoutMode = 'auto', onProgress?: (message: string) => void): Promise<string> {
     const result = await convertPageToFigma(source, name, layout, onProgress);
     const { encodeFigmaData, composeClipboardHtml } = await import('@figit/fig-kiwi');
     return composeClipboardHtml(encodeFigmaData(result.document).base64);
 }
 
-export async function copyFigmaToClipboard(source: FigmaCopySource, name?: string, layout: FigmaLayoutMode = 'preserve', onProgress?: (message: string) => void): Promise<void> {
+export async function copyFigmaToClipboard(source: FigmaCopySource, name?: string, layout: FigmaLayoutMode = 'auto', onProgress?: (message: string) => void): Promise<void> {
     let variants = prepared.get(source);
     if (!variants) {
         variants = new Map();

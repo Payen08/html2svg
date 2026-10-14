@@ -1,0 +1,24 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>页面弹窗捕获验收</title><style>
+body{margin:0;font:16px 'PingFang SC',sans-serif;background:#e8eef5;color:#172554}main{padding:32px}button{padding:10px 18px}dialog{border:1px solid #ddd;border-radius:16px;width:420px;padding:24px}dialog:modal{background:#f0fdf4}dialog:modal h2{color:#166534;font-weight:500}dialog::backdrop{background:rgba(15,23,42,.55)}[popover]{padding:24px;border-radius:12px;background:#eff6ff}#status{white-space:pre-wrap}textarea[hidden]{display:none}
+</style><main><h1>背景页面</h1><button id="open">打开原生对话框</button><button id="popover-open" popovertarget="popover">打开 Popover</button><pre id="status" role="status">等待验收</pre></main><dialog id="dialog"><h2>页面内弹窗</h2><p>捕获当前对话框，保留位置和遮罩</p><input aria-label="姓名" value="默认值"><button id="capture">捕获对话框</button><button id="close">关闭</button></dialog><div id="popover" popover><h2>Popover 浮层</h2><button id="capture-popover">捕获 Popover</button></div><textarea id="payload" hidden></textarea><script type="module">
+import{serializeCaptureDocument}from'/services/captureSnapshot.ts';
+import{convertPageToFigma,prepareFigmaClipboard}from'/services/figmaClipboardService.ts';
+const dialog=document.querySelector('#dialog');document.querySelector('#open').onclick=()=>dialog.showModal();document.querySelector('#close').onclick=()=>dialog.close();
+async function check(selector){
+ const original=document.querySelector(selector),rect=original.getBoundingClientRect();
+ try{
+  const snapshot=serializeCaptureDocument(document);const parsed=new DOMParser().parseFromString(snapshot.html,'text/html');const frozen=parsed.querySelector(selector);
+  if(frozen.style.position!=='fixed'||Math.abs(parseFloat(frozen.style.left)-rect.left)>.01||Math.abs(parseFloat(frozen.style.top)-rect.top)>.01)throw Error('弹窗位置未保留');
+  if(selector==='#dialog'&&!parsed.querySelector('[data-html2svg-backdrop]'))throw Error('遮罩缺失');
+  if(selector==='#popover'&&frozen.hasAttribute('popover'))throw Error('Popover 仍会在快照中隐藏');
+  const source={html:snapshot.html,baseUrl:location.href,width:innerWidth,height:innerHeight};
+  const result=await convertPageToFigma(source,'页面内弹窗捕获','auto');const nodes=result.document.nodeChanges;const trace=result.trace.entries.find(t=>t.tag!=='#text'&&parsed.body.querySelector(t.domPath)===frozen);
+  const frame=trace&&nodes.find(n=>n.guid.localID===trace.guid.localID);if(!frame)throw Error('原生弹窗图层缺失: '+JSON.stringify(result.trace.entries.map(t=>({path:t.domPath,tag:t.tag}))));
+  if(selector==='#dialog'&&!nodes.some(n=>n.type==='TEXT'&&n.textData?.characters===document.querySelector('#dialog input').value))throw Error('弹窗输入文字缺失');
+  if(!nodes.some(n=>n.type==='TEXT'&&n.textData?.characters===(selector==='#dialog'?'页面内弹窗':'Popover 浮层')))throw Error('弹窗文字缺失');
+  document.querySelector('#payload').value=await prepareFigmaClipboard(source,'页面内弹窗捕获','auto');
+  document.querySelector('#status').textContent=JSON.stringify({passed:true,overlay:selector,sourceRect:{x:rect.x,y:rect.y,w:rect.width,h:rect.height},exportedRect:trace.rect,backdrop:!!parsed.querySelector('[data-html2svg-backdrop]'),nativeNodes:nodes.length,autoLayouts:nodes.filter(n=>n.type==='FRAME'&&n.stackMode!=='NONE').length},null,2);
+ }catch(e){document.querySelector('#status').textContent='FAIL: '+e.message}
+}
+document.querySelector('#capture').onclick=()=>check('#dialog');document.querySelector('#capture-popover').onclick=()=>check('#popover');
+</script></html>
