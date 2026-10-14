@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>1080 × 1920 Figma 布局回归</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:'PingFang SC',sans-serif}
+#sample{width:1080px;height:1920px;position:relative;background:#f4faf7}
+#design{width:1200px;height:1600px;transform:scale(.75);transform-origin:top left;padding:48px;background:#e4f8ed}
+#cards{display:flex;gap:32px}article{width:500px;height:280px;padding:24px;border-radius:24px;background:white}
+h2{font-size:40px;line-height:60px;margin:0}p{font-size:24px;line-height:36px;margin:12px 0}
+#overlap{margin-top:-80px;margin-left:160px;position:relative;width:300px;height:180px;background:#d7efe4;padding:24px}
+#dialog{position:fixed;left:540px;top:700px;transform:translate(-50%,-50%);width:600px;height:400px;padding:32px;background:white;border:1px solid #bbe5cf;border-radius:24px}
+#status{position:fixed;right:8px;bottom:8px;z-index:20;background:#111827;color:white;padding:16px;font:14px monospace;max-width:520px;white-space:pre-wrap}
+</style></head><body>
+<main id="sample"><section id="design"><div id="cards"><article><h2>小型電子</h2><p>保留文字大小与卡片位置</p></article><article><h2>大型電器</h2><p>1080 × 1920 竖屏</p></article></div><div id="overlap">重叠区域</div></section><div id="dialog"><h2>確認會員資料</h2><p>固定弹窗保持居中</p></div></main>
+<button id="copy" disabled>复制保持布局验收</button><textarea id="payload" hidden></textarea><pre id="status" role="status">正在验证…</pre>
+<script type="module">
+import {prepareFigmaClipboard,copyFigmaToClipboard} from '/services/figmaClipboardService.ts';
+import {decodeFigmaData,parseClipboardHtml} from '@figit/fig-kiwi';
+try {
+  const source={html:'<!doctype html><html><head>'+document.querySelector('style').outerHTML+'</head><body>'+document.querySelector('#sample').outerHTML+'</body></html>',baseUrl:location.href,width:1080,height:1920};
+  const payload=await prepareFigmaClipboard(source,'竖屏布局验证','preserve');
+  document.querySelector('#payload').value=payload;
+  const copy=document.querySelector('#copy');copy.disabled=false;copy.onclick=()=>copyFigmaToClipboard(source,'竖屏布局验证','preserve');
+  const nodes=decodeFigmaData(parseClipboardHtml(payload).fig).message.nodeChanges;
+  const root=nodes.find(n=>n.type==='FRAME'&&n.parentIndex?.guid.localID===1);
+  const scaledText=nodes.find(n=>n.type==='TEXT'&&n.textData?.characters==='小型電子');
+  const modalText=nodes.find(n=>n.type==='TEXT'&&n.textData?.characters==='確認會員資料');
+  const activeLayouts=nodes.filter(n=>n.type==='FRAME'&&n.stackMode!=='NONE');
+  if(root.size.x!==1080||root.size.y!==1920)throw Error('竖屏画板尺寸改变');
+  if(activeLayouts.length)throw Error('固定图层仍然存在自动布局');
+  if(Math.abs(scaledText.fontSize-30)>.01||Math.abs(scaledText.lineHeight.value-45)>.01)throw Error('缩放后的文字比例错误');
+  if(modalText.fontSize!==40)throw Error('未缩放弹窗的文字被缩放');
+  const byId=new Map(nodes.map(n=>[n.guid.localID,n]));
+  const position=n=>{let x=0,y=0;while(n?.parentIndex){x+=n.transform?.m02||0;y+=n.transform?.m12||0;n=byId.get(n.parentIndex.guid.localID);}return{x,y}};
+  const expected=document.querySelector('#dialog').getBoundingClientRect();
+  const modal=nodes.find(n=>n.type==='FRAME'&&Math.abs(n.size.x-600)<.01&&Math.abs(n.size.y-400)<.01);
+  const actual=position(modal);
+  if(Math.abs(actual.x-expected.x)>.01||Math.abs(actual.y-expected.y)>.01)throw Error('弹窗位置改变');
+  document.querySelector('#status').textContent=JSON.stringify({passed:true,viewport:root.size,scaledFont:scaledText.fontSize,scaledLineHeight:scaledText.lineHeight.value,modalPosition:actual,editableTextNodes:nodes.filter(n=>n.type==='TEXT').length,automaticLayouts:activeLayouts.length},null,2);
+}catch(error){document.querySelector('#status').textContent='FAIL: '+error.message;}
+</script></body></html>

@@ -1,11 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
-
-// Initialize the client with Vite's environment variable
-const createAI = () => {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!apiKey) throw new Error("AI 转换需要配置 Gemini API Key；交互捕获、SVG 和 Figma 导出可直接使用。");
-  return new GoogleGenAI({ apiKey });
-};
+import { getGeminiClient } from './geminiClient';
 
 export type CssFramework = 'vanilla' | 'tailwind';
 
@@ -13,6 +6,7 @@ export const convertSvgToHtml = async (
     svgInput: string,
     framework: CssFramework = 'vanilla'
 ): Promise<{ html: string; css: string }> => {
+    const ai = getGeminiClient();
     try {
         const frameworkInstructions = framework === 'tailwind'
             ? `
@@ -66,7 +60,7 @@ export const convertSvgToHtml = async (
       ${framework === 'tailwind' ? 'The css field should be an empty string for Tailwind.' : ''}
     `;
 
-        const response = await createAI().models.generateContent({
+        const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash-preview-05-20',
             contents: prompt,
             config: {
