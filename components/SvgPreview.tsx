@@ -22,6 +22,7 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
   const [isCopying, setIsCopying] = useState(false);
   const [figmaCopied, setFigmaCopied] = useState(false);
   const [isFigmaCopying, setIsFigmaCopying] = useState(false);
+  const [figmaProgress, setFigmaProgress] = useState("准备 Figma…");
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -85,7 +86,7 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
     setCopied(false);
     setFigmaCopied(false);
     try {
-      await copyFigmaToClipboard(effectiveFigmaSource, activePage?.name || 'Captured page');
+      await copyFigmaToClipboard(effectiveFigmaSource, activePage?.name || 'Captured page', setFigmaProgress);
       setFigmaCopied(true);
     } catch (error) {
       setCopyError(error instanceof Error ? error.message : '复制 Figma 失败，请重试。');
@@ -274,7 +275,7 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
             title={effectiveFigmaSource ? '复制原生 Figma 图层，文字使用 PingFang SC，支持自动布局' : '请重新捕获或使用 Figma SVG 渲染，保存页面布局后即可复制'}
             icon={figmaCopied ? <Check className="w-4 h-4 text-green-400" /> : <Figma className="w-4 h-4" />}
           >
-            {isFigmaCopying ? '准备 Figma…' : figmaCopied ? 'Figma 已复制' : '复制 Figma'}
+            {isFigmaCopying ? figmaProgress : figmaCopied ? 'Figma 已复制' : '复制 Figma'}
           </Button>
           <Button
             variant="secondary"

@@ -25,3 +25,8 @@ dist-ssr
 
 # Generated local capture/export artifacts
 exports/
+
+# Desktop bundles and installers
+desktop-dist/
+release/
+desktop/assets/icon.iconset/

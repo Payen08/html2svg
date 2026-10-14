@@ -61,7 +61,7 @@ export function writeRichClipboard(html: string): void {
     }
 }
 
-export async function prepareFigmaClipboard(source: FigmaCopySource, name = 'Captured page'): Promise<string> {
+export async function prepareFigmaClipboard(source: FigmaCopySource, name = 'Captured page', onProgress?: (message: string) => void): Promise<string> {
     const iframe = document.createElement('iframe');
     iframe.setAttribute('sandbox', 'allow-same-origin');
     iframe.style.cssText = `position:fixed;left:0;top:0;width:${source.width}px;height:${source.height}px;opacity:0;pointer-events:none;border:0;z-index:-9999`;
@@ -77,17 +77,23 @@ export async function prepareFigmaClipboard(source: FigmaCopySource, name = 'Cap
     try {
         await new Promise<void>((resolve, reject) => {
             const timer = setTimeout(() => reject(new Error('准备 Figma 页面超时，请重试。')), 15000);
-            iframe.onload = () => { clearTimeout(timer); resolve(); };
+            iframe.onload = () => {
+                // Electron may fire an initial about:blank load before srcdoc is ready.
+                if (iframe.contentDocument?.URL !== 'about:srcdoc') return;
+                clearTimeout(timer); resolve();
+            };
             iframe.onerror = () => { clearTimeout(timer); reject(new Error('无法读取页面布局。')); };
-            document.body.appendChild(iframe);
             iframe.srcdoc = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+            document.body.appendChild(iframe);
         });
         const liveDoc = iframe.contentDocument;
         if (!liveDoc?.body) throw new Error('无法读取页面布局。');
+        onProgress?.("处理文字…");
         applyFigmaTextFont(liveDoc);
         await liveDoc.fonts.ready;
 
         // IMG SVGs become real vectors, while keeping their CSS layout dimensions.
+        onProgress?.("处理图片…");
         const assets = createExportAssetLoader();
         await Promise.all(Array.from(liveDoc.images).map(async image => {
             const src = image.currentSrc || image.src;
@@ -109,6 +115,7 @@ export async function prepareFigmaClipboard(source: FigmaCopySource, name = 'Cap
         await preserveSvgImageLayers(liveDoc);
         const tablePlans = prepareFigmaTables(liveDoc);
 
+        onProgress?.("生成 Figma 图层…");
         const { createFigmaConverter, createFontsourceLoader } = await import('@figit/dom-to-figma');
         const { encodeFigmaData, composeClipboardHtml } = await import('@figit/fig-kiwi');
         const iconFontLoader = createFontsourceLoader();
@@ -148,12 +155,19 @@ export async function prepareFigmaClipboard(source: FigmaCopySource, name = 'Cap
     }
 }
 
-export async function copyFigmaToClipboard(source: FigmaCopySource, name?: string): Promise<void> {
+export async function copyFigmaToClipboard(source: FigmaCopySource, name?: string, onProgress?: (message: string) => void): Promise<void> {
     let html = prepared.get(source);
     if (!html) {
-        html = prepareFigmaClipboard(source, name);
+        onProgress?.("准备页面…");
+        html = prepareFigmaClipboard(source, name, onProgress);
         prepared.set(source, html);
         html.catch(() => prepared.delete(source));
+    }
+    if (window.html2svgDesktop) {
+        const value = await html;
+        onProgress?.("写入剪贴板…");
+        await window.html2svgDesktop.copyFigma(value);
+        return;
     }
     if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
         try {

@@ -10,7 +10,7 @@ const code = ts.transpileModule(
 ).outputText;
 function service(context) {
     const exports = {};
-    runInNewContext(code, { exports, ...context });
+    runInNewContext(code, { exports, window: {}, ...context });
     return exports.copySvgToClipboard;
 }
 
@@ -50,4 +50,12 @@ test('HTTP/permission fallback copies the SVG and cleans up even when copying fa
         assert.equal(removed, true);
         assert.equal(restoredFocus, true);
     }
+});
+
+test('desktop SVG copies use the native bridge and propagate failures',async()=>{
+    let copied;
+    const copy=service({window:{html2svgDesktop:{copySvg:async svg=>{copied=svg;return true;}}}});
+    await copy('<svg></svg>');assert.equal(copied,'<svg></svg>');
+    const fail=service({window:{html2svgDesktop:{copySvg:async()=>{throw Error('native clipboard unavailable');}}}});
+    await assert.rejects(fail('<svg></svg>'),/native clipboard unavailable/);
 });

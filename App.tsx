@@ -1,3 +1,4 @@
+import appLogo from './assets/logo.png';
 import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, Code, Github, Zap, Cpu, Settings2, Box, ArrowRightLeft, Upload, FileCode2, Globe, Link, Plus, X, Layers, Loader2, CheckCircle, AlertCircle, Download, Maximize2 } from 'lucide-react';
 import { Button } from './components/Button';
@@ -705,9 +706,7 @@ function App() {
       {/* Header */}
       <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800 bg-gray-900/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="flex items-center space-x-3">
-          <div className={`p-2 rounded-lg transition-colors bg-${currentColor}-600`}>
-            <Box className="w-6 h-6 text-white" />
-          </div>
+          <img src={appLogo} alt="HTML2SVG Logo" className="w-12 h-12 object-contain" />
           <div>
             <h1 className="text-xl font-bold bg-gradient-to-r from-gray-100 to-gray-400 bg-clip-text text-transparent">
               {isHtmlToSvg ? 'HTML2SVG' : 'SVG2HTML'} <span className={`text-${currentColor}-400`}>

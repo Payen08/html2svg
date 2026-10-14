@@ -1,12 +1,17 @@
 {
   "name": "html2svg-ai-converter",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test tests/*.test.mjs",
+    "desktop:build": "vite build --mode desktop && node scripts/build-desktop.mjs",
+    "desktop:dev": "npm run desktop:pack && node scripts/run-desktop.mjs",
+    "desktop:pack": "npm run desktop:build && electron-builder --mac dir --arm64 --publish never",
+    "desktop:dmg": "npm run desktop:build && electron-builder --mac dmg --arm64 --publish never"
   },
   "dependencies": {
     "@figit/dom-to-figma": "0.2.4",
@@ -17,9 +22,62 @@
     "react-dom": "^19.2.3"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.6.1",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "postcss": "^8.5.30",
+    "tailwindcss": "^3.4.19",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
+  },
+  "description": "Local HTML capture and editable Figma export",
+  "author": "Payen08",
+  "main": "desktop-dist/main.cjs",
+  "build": {
+    "appId": "com.payen.html2svg",
+    "productName": "HTML2SVG Artboard",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop-dist/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "identity": "-",
+      "icon": "desktop/assets/icon.icns"
+    },
+    "dmg": {
+      "title": "HTML2SVG Artboard",
+      "artifactName": "HTML2SVG-Artboard-${version}-mac-${arch}.${ext}",
+      "contents": [
+        {
+          "x": 150,
+          "y": 180,
+          "type": "file"
+        },
+        {
+          "x": 450,
+          "y": 180,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
   }
 }

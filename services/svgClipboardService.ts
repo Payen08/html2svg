@@ -5,6 +5,11 @@ export async function copySvgToClipboard(source: string): Promise<void> {
         .replace(/<!--[\s\S]*?-->/g, '').trim();
     if (!/^<svg(?:\s|>)/.test(svg)) throw new Error('当前画板没有有效的 SVG 内容。');
 
+    if (window.html2svgDesktop) {
+        await window.html2svgDesktop.copySvg(svg);
+        return;
+    }
+
     if (navigator.clipboard?.writeText) {
         try {
             await navigator.clipboard.writeText(svg);

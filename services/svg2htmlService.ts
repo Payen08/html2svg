@@ -1,7 +1,11 @@
 import { GoogleGenAI } from "@google/genai";
 
 // Initialize the client with Vite's environment variable
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
+const createAI = () => {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) throw new Error("AI 转换需要配置 Gemini API Key；交互捕获、SVG 和 Figma 导出可直接使用。");
+  return new GoogleGenAI({ apiKey });
+};
 
 export type CssFramework = 'vanilla' | 'tailwind';
 
@@ -62,7 +66,7 @@ export const convertSvgToHtml = async (
       ${framework === 'tailwind' ? 'The css field should be an empty string for Tailwind.' : ''}
     `;
 
-        const response = await ai.models.generateContent({
+        const response = await createAI().models.generateContent({
             model: 'gemini-2.5-flash-preview-05-20',
             contents: prompt,
             config: {
