@@ -9,10 +9,10 @@ const code = ts.transpileModule(
     { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }
 ).outputText;
 
-function loaderWith(fetch) {
+function loaderWith(fetch, baseUrl) {
     const exports = {};
-    runInNewContext(code, { exports, fetch, Uint8Array, TextDecoder, btoa });
-    return exports.createExportAssetLoader();
+    runInNewContext(code, { exports, fetch, Uint8Array, TextDecoder, btoa, URL });
+    return exports.createExportAssetLoader(baseUrl);
 }
 
 test('SVG icons return vector source and repeated assets share one fetch', async () => {
@@ -42,4 +42,17 @@ test('missing assets and HTML fallbacks fail instead of exporting broken image r
     await assert.rejects(missing('http://local/icon.svg'), /404/);
     const fallback = loaderWith(async () => new Response('<html>wrong page</html>', { headers: { 'content-type': 'text/html' } }));
     await assert.rejects(fallback('http://local/icon.svg'), /SVG 图标内容无效/);
+});
+
+test('escaped Chinese root assets resolve through their own capture proxy and share a cache', async()=>{
+ const base='http://127.0.0.1:53943/proxy-url/http%3A%2F%2F10.10.28.129%3A10882/app/page.html';
+ const calls=[];const loader=loaderWith(async url=>{calls.push(url);return new Response(Uint8Array.from([137,80,78,71]),{headers:{'content-type':'image/png'}})},base);
+ await loader('http://127.0.0.1:53943/%E5%A2%A8%E5%BD%B1logo.png');
+ await loader('/墨影logo.png');
+ assert.deepEqual(calls,['http://127.0.0.1:53943/proxy-url/http%3A%2F%2F10.10.28.129%3A10882/%E5%A2%A8%E5%BD%B1logo.png']);
+});
+test('proxy repair keeps relative paths, query strings and other origins isolated', async()=>{
+ const calls=[];const loader=loaderWith(async url=>{calls.push(url);return new Response('',{headers:{'content-type':'image/png'}})},'http://127.0.0.1:53943/proxy/5173/app/page.html');
+ await loader('../logo.png?v=2');await loader('http://127.0.0.1:5173/logo.png?v=3');await loader('https://cdn.example.com/logo.png');await loader('http://127.0.0.1:53943/proxy/9000/logo.png');
+ assert.deepEqual(calls,['http://127.0.0.1:53943/proxy/5173/logo.png?v=2','http://127.0.0.1:53943/proxy/5173/logo.png?v=3','https://cdn.example.com/logo.png','http://127.0.0.1:53943/proxy/9000/logo.png']);
 });

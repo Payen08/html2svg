@@ -1,9 +1,28 @@
 export type ExportAsset = { kind: 'svg'; source: string } | { kind: 'image'; source: string };
 
+/** Resolve escaped root assets using this capture's proxy, never another tab. */
+export function resolveExportAssetUrl(url: string, baseUrl?: string): string {
+    if (!baseUrl || /^(data:|blob:|#)/i.test(url)) return url;
+    try {
+        const base = new URL(baseUrl);
+        const match = base.pathname.match(/^\/(?:proxy-url\/[^/]+|proxy\/\d+)(?=\/|$)/);
+        if (!match) return url;
+        const resolved = new URL(url, base);
+        const prefix = match[0];
+        const targetOrigin = prefix.startsWith('/proxy-url/')
+            ? new URL(decodeURIComponent(prefix.slice('/proxy-url/'.length))).origin
+            : `http://127.0.0.1:${prefix.slice('/proxy/'.length)}`;
+        if (resolved.origin !== base.origin && resolved.origin !== targetOrigin) return url;
+        if (resolved.origin === base.origin && /^\/(?:proxy|proxy-url|__html2svg_internal__)(?:\/|$)/.test(resolved.pathname)) return resolved.href;
+        return base.origin + prefix + resolved.pathname + resolved.search + resolved.hash;
+    } catch { return url; }
+}
+
 /** Each export owns its cache, so repeated icons share a fetch without stale assets. */
-export function createExportAssetLoader() {
+export function createExportAssetLoader(baseUrl?: string) {
     const cache = new Map<string, Promise<ExportAsset>>();
     return (url: string): Promise<ExportAsset> => {
+        url = resolveExportAssetUrl(url, baseUrl);
         const cached = cache.get(url);
         if (cached) return cached;
         const request = (async (): Promise<ExportAsset> => {

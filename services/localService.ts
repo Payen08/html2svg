@@ -496,7 +496,7 @@ export const convertHtmlToSvgLocal = async (
               }
             };
 
-            const loadExportAsset = createExportAssetLoader();
+            const loadExportAsset = createExportAssetLoader(baseUrl);
             const renderEmbeddedAsset = async (
               url: string, x: number, y: number, width: number, height: number,
               style: CSSStyleDeclaration, clipAttr = '', preserveAspectRatio = 'xMidYMid slice'

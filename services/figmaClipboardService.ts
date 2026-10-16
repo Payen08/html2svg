@@ -7,7 +7,7 @@ import { applyFigmaAutoLayout, compactFigmaRoot } from './figmaAutoLayoutService
 import { applyFigmaAlignment } from './figmaAlignmentService';
 import { expandSvgUses } from './svgUseService';
 import type { FigmaCopySource } from '../types';
-import { createExportAssetLoader } from './exportAssetService';
+import { createExportAssetLoader, resolveExportAssetUrl } from './exportAssetService';
 import { FIGMA_TEXT_FONT, applyFigmaTextFont, normalizePingFangNames, pingFangWeight } from './figmaTextFontService';
 import type { ConvertResult } from '@figit/dom-to-figma';
 
@@ -103,9 +103,11 @@ export async function convertPageToFigma(source: FigmaCopySource, name = 'Captur
 
         // IMG SVGs become real vectors, while keeping their CSS layout dimensions.
         onProgress?.("处理图片…");
-        const assets = createExportAssetLoader();
+        const assets = createExportAssetLoader(source.baseUrl);
         await Promise.all(Array.from(liveDoc.images).map(async image => {
-            const src = image.currentSrc || image.src;
+            const originalSrc = image.currentSrc || image.src;
+            const src = resolveExportAssetUrl(originalSrc, source.baseUrl);
+            if (src !== originalSrc) { image.removeAttribute('srcset'); image.src = src; }
             if (!/\.svg(?:[?#]|$)|^data:image\/svg\+xml/i.test(src)) return;
             const asset = await assets(src);
             if (asset.kind !== 'svg') return;

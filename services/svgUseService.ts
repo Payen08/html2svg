@@ -2,7 +2,7 @@ import { createExportAssetLoader } from './exportAssetService';
 
 /** Exporters cannot resolve sprite references; materialize their vector geometry. */
 export async function expandSvgUses(doc: Document): Promise<void> {
-    const assets = createExportAssetLoader();
+    const assets = createExportAssetLoader(doc.baseURI);
     const sprites = new Map<string, Promise<Document>>();
     for (let depth = 0; depth < 8; depth++) {
         const uses = Array.from(doc.querySelectorAll('svg use'));

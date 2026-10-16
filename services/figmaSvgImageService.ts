@@ -1,7 +1,7 @@
 import { createExportAssetLoader } from './exportAssetService';
 /** The native vector converter omits SVG <image>. Preserve bitmap-bearing map SVGs as images. */
 export async function preserveSvgImageLayers(doc:Document):Promise<void>{
- const load=createExportAssetLoader();
+ const load=createExportAssetLoader(doc.baseURI);
  const svgs=Array.from(doc.querySelectorAll('svg')).filter(svg=>svg.querySelector('image')&&!svg.parentElement?.closest('svg'));
  for(const svg of svgs){
   const clone=svg.cloneNode(true) as SVGSVGElement;

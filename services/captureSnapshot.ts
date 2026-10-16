@@ -33,6 +33,21 @@ export function selectCaptureDocument(source: Document): Document {
 /** Freeze a live document without scripts, preserving fields and resource URLs. */
 export function serializeCaptureDocument(source: Document): { html: string; url: string } {
     const clone = source.documentElement.cloneNode(true) as HTMLElement;
+    // new URL('/logo.png', proxyBase) drops the proxy prefix. Keep resources
+    // bound to the live captured page, including absolute URLs made by JS.
+    const resolveResource = (raw: string): string => {
+        const resolved = new URL(raw, source.baseURI);
+        const page = new URL(source.URL);
+        const match = page.pathname.match(/^\/(?:proxy-url\/[^/]+|proxy\/\d+)(?=\/|$)/);
+        if (!match) return resolved.href;
+        const prefix = match[0];
+        const targetOrigin = prefix.startsWith('/proxy-url/')
+            ? new URL(decodeURIComponent(prefix.slice('/proxy-url/'.length))).origin
+            : `http://127.0.0.1:${prefix.slice('/proxy/'.length)}`;
+        if (resolved.origin !== page.origin && resolved.origin !== targetOrigin) return resolved.href;
+        if (resolved.origin === page.origin && /^\/(?:proxy|proxy-url|__html2svg_internal__)(?:\/|$)/.test(resolved.pathname)) return resolved.href;
+        return page.origin + prefix + resolved.pathname + resolved.search + resolved.hash;
+    };
     const fields = source.querySelectorAll('input, textarea, select');
     const clonedFields = clone.querySelectorAll('input, textarea, select');
     fields.forEach((field, index) => {
@@ -135,10 +150,21 @@ export function serializeCaptureDocument(source: Document): { html: string; url:
         Array.from(node.attributes).forEach(attr => {
             if (/^on/i.test(attr.name)) node.removeAttribute(attr.name);
         });
+        if (node.hasAttribute('srcset')) {
+            node.setAttribute('srcset', node.getAttribute('srcset')!.replace(/(^|,\s*)((?:\/(?!\/)|https?:\/\/)[^\s,]+)/gi, (match, separator, raw) => {
+                try { return separator + resolveResource(raw); } catch { return match; }
+            }));
+        }
+        if (node.hasAttribute('style')) {
+            node.setAttribute('style', node.getAttribute('style')!.replace(/url\(\s*(["']?)(.*?)\1\s*\)/gi, (match, _quote, raw) => {
+                if (/^(data:|blob:|#)/i.test(raw)) return match;
+                try { return `url("${resolveResource(raw)}")`; } catch { return match; }
+            }));
+        }
         ['src', 'href', 'action', 'poster'].forEach(attr => {
             const raw = node.getAttribute(attr);
             if (!raw || /^(#|data:|blob:|javascript:|mailto:|tel:)/i.test(raw)) return;
-            try { node.setAttribute(attr, new URL(raw, source.baseURI).href); } catch {}
+            try { node.setAttribute(attr, resolveResource(raw)); } catch {}
         });
     });
     return { html: '<!DOCTYPE html>\n' + clone.outerHTML, url: source.URL };

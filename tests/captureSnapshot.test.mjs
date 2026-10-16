@@ -9,7 +9,7 @@ const code = ts.transpileModule(
     { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }
 ).outputText;
 const exports = {};
-runInNewContext(code, { exports });
+runInNewContext(code, { exports, URL });
 const { selectCaptureDocument } = exports;
 
 function documentWith(frames = []) {
@@ -50,11 +50,21 @@ test('unreadable or loading full-page frames fail explicitly instead of capturin
 
 test('snapshots keep current form values and mask password fields',()=>{
     const inputs=[{tagName:'INPUT',type:'text',value:'当前输入'},{tagName:'INPUT',type:'password',value:'private-password'}];
-    const copies=inputs.map(input=>({tagName:input.tagName,values:new Map([['type',input.type]]),setAttribute(name,value){this.values.set(name,value)},getAttribute(name){return this.values.get(name)},get attributes(){return [...this.values].map(([name,value])=>({name,value}))}}));
+    const copies=inputs.map(input=>({tagName:input.tagName,values:new Map([['type',input.type]]),setAttribute(name,value){this.values.set(name,value)},getAttribute(name){return this.values.get(name)},hasAttribute(name){return this.values.has(name)},get attributes(){return [...this.values].map(([name,value])=>({name,value}))}}));
     const clone={querySelectorAll(selector){return selector==='input, textarea, select'||selector==='*'?copies:[]},get outerHTML(){return '<html><body>'+copies.map(copy=>'<input '+[...copy.values].map(([name,value])=>name+'="'+value+'"').join(' ')+'>').join('')+'</body></html>'}};
     const source={documentElement:{cloneNode:()=>clone},querySelectorAll:()=>inputs,defaultView:null,URL:'https://example.com/form',baseURI:'https://example.com/form'};
     const snapshot=exports.serializeCaptureDocument(source);
     assert.match(snapshot.html,/当前输入/);assert.ok(!snapshot.html.includes('private-password'));
     assert.equal(copies[1].getAttribute('value'),'•'.repeat(inputs[1].value.length));
     assert.equal(snapshot.url,source.URL);
+});
+
+test('snapshot URLs retain the requesting proxy for root-relative and dynamically absolute images',()=>{
+ const base='http://127.0.0.1:53943/proxy-url/http%3A%2F%2F10.10.28.129%3A10882/app/index.html';
+ const sources=['/墨影logo.png','http://127.0.0.1:53943/墨影logo.png','../logo.png','https://cdn.example.com/icon.png'];
+ const copies=sources.map(src=>({attributes:[{name:'src',value:src}],getAttribute:()=>src,hasAttribute:()=>false,setAttribute(name,value){this.resolved=value}}));
+ const clone={querySelectorAll:selector=>selector==='*'?copies:[],outerHTML:'<html></html>'};
+ exports.serializeCaptureDocument({documentElement:{cloneNode:()=>clone},querySelectorAll:()=>[],defaultView:null,URL:base,baseURI:base});
+ assert.equal(copies[0].resolved,'http://127.0.0.1:53943/proxy-url/http%3A%2F%2F10.10.28.129%3A10882/%E5%A2%A8%E5%BD%B1logo.png');
+ assert.equal(copies[1].resolved,copies[0].resolved);assert.match(copies[2].resolved,/10882\/logo.png$/);assert.equal(copies[3].resolved,sources[3]);
 });
