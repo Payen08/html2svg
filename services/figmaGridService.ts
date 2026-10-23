@@ -3,6 +3,8 @@ import type { ConvertResult } from '@figit/dom-to-figma';
 const key = (guid: { sessionID: number; localID: number }) => `${guid.sessionID}:${guid.localID}`;
 const align = (value: string) => /center/.test(value) ? 'CENTER' : /end|right/.test(value) ? 'MAX' : 'MIN';
 function declaration(element: Element, property: string): string {
+    const captured = element.getAttribute?.(`data-html2svg-sizing-${property}`);
+    if (captured) return captured;
     return (element as HTMLElement & { computedStyleMap?: () => Map<string, unknown> }).computedStyleMap?.().get(property)?.toString()
         || (element as HTMLElement).style?.getPropertyValue(property) || 'auto';
 }
@@ -64,7 +66,44 @@ export function applyFigmaGridLayout(root: HTMLElement, result: ConvertResult): 
         const fixedHeight = !automatic(declaration(element, 'height'));
         const guid = () => ({ sessionID: node.guid.sessionID, localID: nextId++ });
         const columnIds = columns.map(guid);
-        const rowIds = Array.from({ length: Math.ceil(children.length / columns.length) }, guid);
+        // CSS Grid items occupy tracks, not just their ordinal child index.
+        // Tailwind's col-span-7 / col-span-5 must remain 7 / 5 native tracks.
+        const axis = (start: string = 'auto', end: string = 'auto', count: number) => {
+            const line = (value: string) => /^-?\d+$/.test(value) ? (Number(value) > 0 ? Number(value) - 1 : count + Number(value) + 1) : undefined;
+            let first = line(start), last = line(end);
+            let span = Math.max(1, Number((start.match(/\bspan\s+(\d+)/) || end.match(/\bspan\s+(\d+)/))?.[1]) || 1);
+            if (first !== undefined && last !== undefined) span = Math.max(1, last - first);
+            else if (first === undefined && last !== undefined) first = Math.max(0, last - span);
+            return { start: first, span };
+        };
+        const occupied = new Set<string>();
+        let cursor = 0;
+        const dense = style.gridAutoFlow?.includes('dense');
+        const placements = children.map(child => {
+            const owner = elementOf(child.guid);
+            const css = owner ? styleOf(owner) : style;
+            const col = axis(css.gridColumnStart, css.gridColumnEnd, columns.length);
+            const row = axis(css.gridRowStart, css.gridRowEnd, Math.max(children.length, 1));
+            col.span = Math.min(col.span, columns.length);
+            if (col.start !== undefined) col.start = Math.min(Math.max(0, col.start), columns.length - col.span);
+            const free = (r: number, c: number) => {
+                if (c + col.span > columns.length) return false;
+                for (let y = r; y < r + row.span; y++) for (let x = c; x < c + col.span; x++) if (occupied.has(`${y}:${x}`)) return false;
+                return true;
+            };
+            let r = row.start ?? Math.floor((dense ? 0 : cursor) / columns.length);
+            let c = col.start ?? (row.start !== undefined ? 0 : (dense ? 0 : cursor) % columns.length);
+            if (col.start !== undefined && c < cursor % columns.length && row.start === undefined && !dense) r++;
+            while (!(row.start !== undefined && col.start !== undefined) && !free(r, c)) {
+                if (col.start !== undefined) r++;
+                else { c++; if (c >= columns.length) { c = 0; r++; } }
+            }
+            for (let y = r; y < r + row.span; y++) for (let x = c; x < c + col.span; x++) occupied.add(`${y}:${x}`);
+            cursor = r * columns.length + c + col.span;
+            return { row: r, column: c, rowSpan: row.span, columnSpan: col.span };
+        });
+        const rowIds = Array.from({ length: Math.max(...placements.map(p => p.row + p.rowSpan)) }, guid);
+        const flexRows = fixedHeight && /fr/.test(declaration(element, 'grid-template-rows'));
         const positions = (ids: typeof columnIds) => ({ entries: ids.map((id, index) => ({ id, position: String(index).padStart(6, '0') })) });
         Object.assign(node, {
             stackMode: 'GRID', stackWrap: 'NO_WRAP', stackPrimarySizing: 'FIXED',
@@ -75,13 +114,14 @@ export function applyFigmaGridLayout(root: HTMLElement, result: ConvertResult): 
                 minSizing: { type: 'FIXED', value: flexible ? 0 : columns[index] },
                 maxSizing: { type: flexible ? 'FLEX' : 'FIXED', value: columns[index] },
             } })) },
-            gridRowsSizing: { entries: rowIds.map(id => ({ id, trackSize: { minSizing: { type: 'HUG', value: 1 }, maxSizing: { type: 'HUG', value: 1 } } })) },
+            gridRowsSizing: { entries: rowIds.map(id => ({ id, trackSize: { minSizing: { type: flexRows ? 'FIXED' : 'HUG', value: flexRows ? 0 : 1 }, maxSizing: { type: flexRows ? 'FLEX' : 'HUG', value: 1 } } })) },
         });
         children.forEach((child, index) => {
             const sizing = itemSizing(child);
+            const placement = placements[index];
             Object.assign(child, {
-                gridRowAnchor: rowIds[Math.floor(index / columnIds.length)], gridColumnAnchor: columnIds[index % columnIds.length],
-                gridRowSpan: 1, gridColumnSpan: 1, gridChildHorizontalAlign: align(sizing.horizontal), gridChildVerticalAlign: align(sizing.vertical),
+                gridRowAnchor: rowIds[placement.row], gridColumnAnchor: columnIds[placement.column],
+                gridRowSpan: placement.rowSpan, gridColumnSpan: placement.columnSpan, gridChildHorizontalAlign: align(sizing.horizontal), gridChildVerticalAlign: align(sizing.vertical),
                 stackChildPrimaryGrow: sizing.fillWidth ? 1 : 0, stackChildAlignSelf: sizing.fillHeight ? 'STRETCH' : 'AUTO',
             });
             if (child.type === 'FRAME' && child.stackMode === 'VERTICAL') {
