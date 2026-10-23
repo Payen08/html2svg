@@ -109,3 +109,21 @@ test('captured sizing metadata preserves Hug despite frozen pixel width',()=>{
 test('one shrinkable text column beside a fixed control fills remaining width and wraps text',()=>{
  const nodes=setup(false,{shrinkable:true});assert.equal(nodes.find(n=>n.name==='content').stackChildPrimaryGrow,1);assert.equal(nodes.find(n=>n.name==='paragraph').textAutoResize,'HEIGHT');
 });
+
+function nestedFullBleed(withSibling=false){
+ const elements=new Map();const el=(id,css,width='100%',height='100%')=>{const e={id,tagName:'DIV',namespaceURI:'http://www.w3.org/1999/xhtml',childNodes:[],compareDocumentPosition:()=>4,getAttribute:()=>null,style:{getPropertyValue:()=>''},css:{...defaults,...css},computedStyleMap:()=>new Map([['width',width],['height',height]])};elements.set(id,e);return e};
+ const body=el('body',{});body.tagName='BODY';body.ownerDocument={defaultView:{getComputedStyle:e=>e.css}};body.querySelector=p=>elements.get(p);
+ el('main',{paddingLeft:'24px',paddingRight:'24px',paddingTop:'24px',paddingBottom:'24px'});el('grid',{});el('bleed',{marginLeft:'-24px',marginRight:'-24px',marginTop:'-24px',marginBottom:'-24px'},'calc(100% + 48px)','calc(100% + 48px)');
+ const nodes=[{guid:guid(0),type:'DOCUMENT'},{guid:guid(1),type:'CANVAS',parentIndex:{guid:guid(0),position:'!'}},...[[2,'body',1],[3,'main',2],[4,'grid',3],[5,'bleed',4]].map(([id,name,parent])=>({guid:guid(id),type:'FRAME',name,size:{x:1440,y:900},parentIndex:{guid:guid(parent),position:String(id)}}))];
+ const entries=[[2,':scope'],[3,'main'],[4,'grid'],[5,'bleed']].map(([id,domPath])=>({guid:guid(id),tag:'div',domPath,rect:{x:id===4?24:0,y:id===4?24:0,width:id===4?1392:1440,height:id===4?852:900}}));
+ if(withSibling){el('sibling',{});nodes.push({guid:guid(6),type:'FRAME',name:'sibling',size:{x:100,y:30},parentIndex:{guid:guid(3),position:'6'}});entries.push({guid:guid(6),tag:'div',domPath:'sibling',rect:{x:24,y:24,width:100,height:30}})}
+ const result={document:{nodeChanges:nodes,blobs:[]},trace:{rootGuid:guid(2),entries}};exports.applyFigmaAutoLayout(body,result);return decodeFigmaData(encodeFigmaData(result.document).figBytes).message.nodeChanges;
+}
+test('full-bleed negative margins cancel page padding through an unpadded single-child shell',()=>{
+ const nodes=nestedFullBleed(),main=nodes.find(n=>n.name==='main'),bleed=nodes.find(n=>n.name==='bleed');
+ assert.equal(main.stackHorizontalPadding,0);assert.equal(main.stackVerticalPadding,0);assert.equal(main.stackPaddingRight,0);assert.equal(main.stackPaddingBottom,0);
+ assert.equal(bleed.stackChildAlignSelf,'STRETCH');assert.equal(bleed.stackChildPrimaryGrow,1);
+});
+test('nested negative margins never remove padding shared with other page content',()=>{
+ const main=nestedFullBleed(true).find(n=>n.name==='main');assert.equal(main.stackHorizontalPadding,24);assert.equal(main.stackVerticalPadding,24);assert.equal(main.stackPaddingRight,24);assert.equal(main.stackPaddingBottom,24);
+});

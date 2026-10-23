@@ -143,7 +143,38 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
                 const pairs = [['marginLeft', 'stackHorizontalPadding'], ['marginRight', 'stackPaddingRight'], ['marginTop', 'stackVerticalPadding'], ['marginBottom', 'stackPaddingBottom']] as const;
                 for (const [margin, padding] of pairs) {
                     const value = px(childStyle[margin]);
-                    if (value < 0) node[padding] = Math.max(0, px(style[padding === 'stackHorizontalPadding' ? 'paddingLeft' : padding === 'stackPaddingRight' ? 'paddingRight' : padding === 'stackVerticalPadding' ? 'paddingTop' : 'paddingBottom']) + value);
+                    if (value >= 0) continue;
+                    const cssPadding = padding === 'stackHorizontalPadding' ? 'paddingLeft' : padding === 'stackPaddingRight' ? 'paddingRight' : padding === 'stackVerticalPadding' ? 'paddingTop' : 'paddingBottom';
+                    let remaining = -value;
+                    let current: NativeNode | undefined = node;
+                    while (current && remaining > 0) {
+                        const owner = elements.get(guidKey(current.guid));
+                        if (!owner) break;
+                        const available = Math.min(Number(current[padding]) || 0, px(styleOf(owner)[cssPadding]));
+                        const consumed = Math.min(remaining, available);
+                        current[padding] = (Number(current[padding]) || 0) - consumed;
+                        remaining -= consumed;
+                        if (consumed > 0) {
+                            const sizing = sizingOverrides.get(guidKey(flow[0].guid)) || {
+                                width: policy(flow[0], childElement, 'width', element), height: policy(flow[0], childElement, 'height', element),
+                            };
+                            const axis = /Left|Right/.test(margin) ? 'width' : 'height';
+                            // calc(100% + margins) becomes Fill once the cancelled
+                            // inset is removed, rather than a frozen pixel box.
+                            if (declaredSize(childElement, axis).startsWith('calc(')) sizing[axis] = 'FILL';
+                            sizingOverrides.set(guidKey(flow[0].guid), sizing);
+                        }
+                        const parent = current.parentIndex && nodes.find(candidate => guidKey(candidate.guid) === guidKey(current!.parentIndex!.guid));
+                        if (!parent || parent.type !== 'FRAME') break;
+                        const siblings = (children.get(guidKey(parent.guid)) || []).filter(candidate => {
+                            const sibling = elements.get(guidKey(candidate.guid));
+                            return sibling && !/^(absolute|fixed)$/.test(styleOf(sibling).position);
+                        });
+                        // Only cross shells with one flow item: never remove
+                        // shared page padding around unrelated siblings.
+                        if (siblings.length !== 1 || siblings[0] !== current) break;
+                        current = parent;
+                    }
                 }
             }
         }

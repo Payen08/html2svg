@@ -48,7 +48,7 @@ npm ci
 npm run desktop:dmg
 ```
 
-The installer is written to `release/HTML2SVG-Artboard-0.1.4-mac-arm64.dmg`. Open it and drag **HTML2SVG Artboard** to **Applications**. The application includes Chromium, the compiled UI, local proxy and font service; Node.js and a separate development server are not required. HTML rendering, SVG export and Figma copying work locally; remote page capture requires access to the target network.
+The installer is written to `release/HTML2SVG-Artboard-0.1.5-mac-arm64.dmg`. Open it and drag **HTML2SVG Artboard** to **Applications**. The application includes Chromium, the compiled UI, local proxy and font service; Node.js and a separate development server are not required. HTML rendering, SVG export and Figma copying work locally; remote page capture requires access to the target network.
 
 `npm run desktop:dev` builds and launches the packaged app. `npm run desktop:pack` creates the `.app` without a disk image. `node scripts/build-icon.mjs` regenerates the icon from `assets/logo.png`.
 
@@ -59,3 +59,5 @@ Figma copying defaults to **自适应布局** for native Auto Layout/Grid. Choos
 Capture and export retain the originating page’s proxy prefix for root-relative image URLs, including Chinese filenames and dynamically assigned absolute URLs. Asset lookup does not use another tab’s target.
 
 Native Figma Grid export preserves CSS column/row spans and explicit track anchors, including 7/5 dashboard panels in a 12-column grid. Fractional rows fill fixed-height grid containers.
+
+Full-bleed content using negative margins can cancel page padding across single-child shells, preserving the captured canvas origin without stripping padding shared with unrelated content.
