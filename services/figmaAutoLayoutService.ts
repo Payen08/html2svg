@@ -6,7 +6,7 @@ type NativeNode = ConvertResult['document']['nodeChanges'][number] & {
 type Sizing = 'HUG' | 'FILL' | 'FIXED';
 const guidKey = (guid: { sessionID: number; localID: number }) => `${guid.sessionID}:${guid.localID}`;
 const px = (value: string) => Number.parseFloat(value) || 0;
-const align = (value: string) => /center/.test(value) ? 'CENTER' : /end|right/.test(value) ? 'MAX' : 'MIN';
+const align = (value: string) => /baseline/.test(value) ? 'BASELINE' : /center/.test(value) ? 'CENTER' : /end|right/.test(value) ? 'MAX' : 'MIN';
 
 /** Typed OM preserves auto/percent sizes, unlike getComputedStyle's resolved pixels. */
 function declaredSize(element: Element, axis: 'width' | 'height'): string {
@@ -67,6 +67,11 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
         const maximum = axis === 'width' ? style.maxWidth : style.maxHeight;
         const measured = traces.get(guidKey(node.guid))?.rect[axis];
         if (node.type === 'FRAME' && /px$/.test(maximum || '') && measured !== undefined && measured >= px(maximum) - 0.5) return 'FIXED';
+        // inset-constrained absolute boxes derive their size from both edges,
+        // even though CSS width/height is auto. Hug would move MAX anchors.
+        const startInset = axis === 'width' ? style.left : style.top;
+        const endInset = axis === 'width' ? style.right : style.bottom;
+        if (/^(absolute|fixed)$/.test(style.position) && startInset && endInset && startInset !== 'auto' && endInset !== 'auto') return 'FIXED';
         if (/^100(?:\.0+)?%$/.test(size)) return 'FILL';
         if (!/^(auto|min-content|max-content|fit-content)(\(|$)/.test(size)) return 'FIXED';
         if (node.type === 'TEXT' && axis === 'height') return 'HUG';
@@ -126,9 +131,18 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
             return childElement === element || !/^(absolute|fixed)$/.test(styleOf(childElement).position);
         });
         const grid = style.display.includes('grid');
+        // Block text can mix anonymous text runs with inline emphasis/units.
+        // Its CSS formatting context is still one baseline-aligned line.
+        const inlineTextFlow = !grid && !style.display.includes('flex') && flow.length > 1 && flow.every(child => {
+            const owner = elements.get(guidKey(child.guid));
+            return child.type === 'TEXT' && owner === element || owner && owner !== element && styleOf(owner).display === 'inline';
+        });
+        if (inlineTextFlow) for (const child of flow) {
+            if (child.type === 'TEXT') sizingOverrides.set(guidKey(child.guid), {width:'HUG',height:'HUG'});
+        }
         const row = style.display.includes('flex') ? style.flexDirection.startsWith('row') :
             grid ? style.gridTemplateColumns.trim().split(/\s+/).length > 1 :
-                /^(BUTTON|TR)$/.test(element.tagName) || /inline/.test(style.display);
+                /^(BUTTON|TR)$/.test(element.tagName) || /inline/.test(style.display) || inlineTextFlow;
         node.stackMode = row ? 'HORIZONTAL' : 'VERTICAL';
         node.stackHorizontalPadding = px(style.paddingLeft) + px(style.borderLeftWidth);
         node.stackVerticalPadding = px(style.paddingTop) + px(style.borderTopWidth);
@@ -184,7 +198,7 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
             if (gutter > 0) node.stackPaddingRight += gutter;
         }
         node.stackPrimaryAlignItems = style.justifyContent === 'space-between' ? 'SPACE_BETWEEN' : align(style.justifyContent);
-        node.stackCounterAlignItems = element.tagName === 'BUTTON' ? 'CENTER' : align(style.alignItems);
+        node.stackCounterAlignItems = inlineTextFlow ? 'BASELINE' : element.tagName === 'BUTTON' ? 'CENTER' : align(style.alignItems);
         const wrapping = row && (grid || style.flexWrap === 'wrap');
         node.stackWrap = wrapping ? 'WRAP' : 'NO_WRAP';
         node.stackCounterSpacing = wrapping ? px(style.rowGap) : 0;
@@ -192,6 +206,12 @@ export function applyFigmaAutoLayout(root: HTMLElement, result: ConvertResult): 
         const height = policy(node, element, 'height', parentElement);
         node.stackPrimarySizing = (row ? width : height) === 'HUG' && node.stackPrimaryAlignItems !== 'SPACE_BETWEEN' ? 'RESIZE_TO_FIT' : 'FIXED';
         node.stackCounterSizing = (row ? height : width) === 'HUG' ? 'RESIZE_TO_FIT' : 'FIXED';
+        // Hug cannot derive a box from absolute children. Keep the measured
+        // containing block so bottom/right anchors retain their captured origin.
+        if (!flow.length && childNodes.length) {
+            node.stackPrimarySizing = 'FIXED';
+            node.stackCounterSizing = 'FIXED';
+        }
         const minWidth = /px$/.test(style.minWidth || '') ? px(style.minWidth) : 0;
         const minHeight = /px$/.test(style.minHeight || '') ? px(style.minHeight) : 0;
         if (minWidth || minHeight) Object.assign(node, { minSize: { value: { x: minWidth, y: minHeight } } });

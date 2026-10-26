@@ -127,3 +127,24 @@ test('full-bleed negative margins cancel page padding through an unpadded single
 test('nested negative margins never remove padding shared with other page content',()=>{
  const main=nestedFullBleed(true).find(n=>n.name==='main');assert.equal(main.stackHorizontalPadding,24);assert.equal(main.stackVerticalPadding,24);assert.equal(main.stackPaddingRight,24);assert.equal(main.stackPaddingBottom,24);
 });
+
+test('a measured containing block with only absolute children never collapses to Hug',()=>{
+ const elements=new Map();const el=(id,position)=>({id,tagName:'DIV',childNodes:[],namespaceURI:'http://www.w3.org/1999/xhtml',getAttribute:()=>null,css:{...defaults,position},computedStyleMap:()=>new Map([['width','auto'],['height','auto']])});
+ const root=el('root','static'),layer=el('layer','absolute'),panel=el('panel','absolute');elements.set('layer',layer);elements.set('panel',panel);panel.css.top='112px';panel.css.bottom='24px';panel.childNodes=[{}];root.ownerDocument={defaultView:{getComputedStyle:e=>e.css}};root.querySelector=p=>elements.get(p);
+ const nodes=[{guid:guid(0),type:'FRAME',name:'root',size:{x:1440,y:900}},{guid:guid(1),type:'FRAME',name:'layer',size:{x:1440,y:900},parentIndex:{guid:guid(0),position:'1'}},{guid:guid(2),type:'FRAME',name:'panel',size:{x:1376,y:764},transform:{m00:1,m01:0,m02:32,m10:0,m11:1,m12:112},verticalConstraint:'MAX',parentIndex:{guid:guid(1),position:'2'}}];
+ nodes.push({guid:guid(3),type:'TEXT',name:'title',characters:'title',textData:{characters:'title'},size:{x:40,y:24},parentIndex:{guid:guid(2),position:'0'}});
+ const result={document:{nodeChanges:nodes,blobs:[]},trace:{rootGuid:guid(0),entries:[{guid:guid(0),domPath:':scope',tag:'body'},{guid:guid(1),domPath:'layer',tag:'div'},{guid:guid(2),domPath:'panel',tag:'main'},{guid:guid(3),domPath:'panel::text[0]',tag:'#text'}].map(t=>({...t,rect:{x:0,y:0,width:1440,height:900}}))}};exports.applyFigmaAutoLayout(root,result);
+ const decoded=decodeFigmaData(encodeFigmaData(result.document).figBytes).message.nodeChanges;const frame=decoded.find(n=>n.name==='layer');assert.equal(frame.stackPrimarySizing,'FIXED');assert.equal(frame.stackCounterSizing,'FIXED');assert.deepEqual(frame.size,{x:1440,y:900});assert.equal(decoded.find(n=>n.name==='panel').transform.m12,112);assert.equal(decoded.find(n=>n.name==='panel').stackPrimarySizing,'FIXED');
+});
+
+test('mixed anonymous text and inline emphasis stay horizontal on a native baseline',()=>{
+ const textNode=index=>({index,compareDocumentPosition(other){return index<other.index?4:2}});const first=textNode(2),emphasis=textNode(4),last=textNode(5);
+ const root={tagName:'BODY',namespaceURI:'http://www.w3.org/1999/xhtml',getAttribute:()=>null,css:defaults,computedStyleMap:()=>new Map()};
+ const heading={tagName:'H2',namespaceURI:root.namespaceURI,getAttribute:()=>null,css:{...defaults},computedStyleMap:()=>new Map(),childNodes:[first,{},last]};
+ const strong={tagName:'STRONG',namespaceURI:root.namespaceURI,getAttribute:()=>null,css:{...defaults,display:'inline'},computedStyleMap:()=>new Map(),childNodes:[emphasis]};
+ root.ownerDocument={defaultView:{getComputedStyle:e=>e.css}};root.querySelector=p=>p==='heading'?heading:strong;
+ const nodes=[{guid:guid(0),type:'FRAME',name:'root',size:{x:400,y:100}},{guid:guid(1),type:'FRAME',name:'heading',size:{x:136,y:24},parentIndex:{guid:guid(0),position:'1'}},...['当前存在','2','项异常'].map((text,i)=>({guid:guid(i+2),type:'TEXT',name:text,characters:text,textData:{characters:text},size:{x:40,y:24},parentIndex:{guid:guid(1),position:String(i)}}))];
+ const entries=[{guid:guid(0),domPath:':scope',tag:'body'},{guid:guid(1),domPath:'heading',tag:'h2'},...['heading::text[0]','strong::text[0]','heading::text[2]'].map((domPath,i)=>({guid:guid(i+2),domPath,tag:'#text',rect:{x:i*44,y:0,width:40,height:24}}))];
+ const result={document:{nodeChanges:nodes,blobs:[]},trace:{rootGuid:guid(0),entries:entries.map(t=>({rect:{x:0,y:0,width:400,height:100},...t}))}};exports.applyFigmaAutoLayout(root,result);const decoded=decodeFigmaData(encodeFigmaData(result.document).figBytes).message.nodeChanges;
+ assert.equal(decoded[1].stackMode,'HORIZONTAL');assert.equal(decoded[1].stackCounterAlignItems,'BASELINE');assert.ok(decoded.filter(n=>n.type==='TEXT').every(n=>n.textAutoResize==='WIDTH_AND_HEIGHT'&&n.stackChildPrimaryGrow===0));
+});
