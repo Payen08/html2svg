@@ -10,6 +10,41 @@ function declaration(element: Element, property: string): string {
 }
 const automatic = (value: string) => /^(auto|normal|min-content|max-content|fit-content)(\(|$)/.test(value);
 
+/** Split track declarations without breaking minmax()/repeat() or named lines. */
+function authoredTracks(value: string, count: number): string[] {
+    const split = (source: string, delimiter: string) => {
+        const tokens: string[] = []; let depth = 0, start = 0;
+        for (let i = 0; i <= source.length; i++) {
+            const char = source[i];
+            if (char === '(' || char === '[') depth++;
+            if (char === ')' || char === ']') depth--;
+            if (i === source.length || depth === 0 && (delimiter === ',' ? char === ',' : /\s/.test(char))) {
+                const token = source.slice(start, i).trim(); if (token && !token.startsWith('[')) tokens.push(token); start = i + 1;
+            }
+        }
+        return tokens;
+    };
+    const tracks = split(value, ' ').flatMap(token => {
+        const repeat = token.match(/^repeat\((.*)\)$/);
+        if (!repeat) return [token];
+        const [times, body] = split(repeat[1], ',');
+        if (!body) return [];
+        const parts = split(body, ' ');
+        const copies = /^\d+$/.test(times) ? Math.min(Number(times), count) : Math.ceil(count / parts.length);
+        return Array.from({length: copies}, () => parts).flat();
+    });
+    return tracks.length === count ? tracks : Array.from({length:count}, () => value);
+}
+function trackSizing(token: string, measured: number) {
+    const fraction = token.match(/([\d.]+)fr/);
+    if (fraction) return {
+        minSizing: {type:'FIXED',value:Number(token.match(/^minmax\(\s*([\d.]+)(?:px)?\s*,/)?.[1]) || 0},
+        maxSizing: {type:'FLEX',value:Number(fraction[1])},
+    };
+    if (/^[\d.]+px$/.test(token)) return {minSizing:{type:'FIXED',value:measured},maxSizing:{type:'FIXED',value:measured}};
+    return {minSizing:{type:'FIXED',value:0},maxSizing:{type:'FLEX',value:measured}};
+}
+
 /** Preserve grid tracks and item alignment; explicit icon sizes never become Fill. */
 export function applyFigmaGridLayout(root: HTMLElement, result: ConvertResult): void {
     const nodes = result.document.nodeChanges;
@@ -62,7 +97,7 @@ export function applyFigmaGridLayout(root: HTMLElement, result: ConvertResult): 
             continue;
         }
 
-        const flexible = /fr|auto|min-content|max-content/.test(declaration(element, 'grid-template-columns'));
+        const columnTracks = authoredTracks(declaration(element, 'grid-template-columns'), columns.length);
         const fixedHeight = !automatic(declaration(element, 'height'));
         const guid = () => ({ sessionID: node.guid.sessionID, localID: nextId++ });
         const columnIds = columns.map(guid);
@@ -79,7 +114,13 @@ export function applyFigmaGridLayout(root: HTMLElement, result: ConvertResult): 
         const occupied = new Set<string>();
         let cursor = 0;
         const dense = style.gridAutoFlow?.includes('dense');
-        const placements = children.map(child => {
+        const placements: {row:number;column:number;rowSpan:number;columnSpan:number}[] = [];
+        const ordered = children.map((child,index) => {
+            const owner=elementOf(child.guid),css=owner?styleOf(owner):style;
+            const explicit=/^-?\d+$/.test(css.gridColumnStart || '') && /^-?\d+$/.test(css.gridRowStart || '');
+            return {child,index,explicit};
+        }).sort((a,b)=>Number(b.explicit)-Number(a.explicit));
+        for (const {child,index,explicit} of ordered) {
             const owner = elementOf(child.guid);
             const css = owner ? styleOf(owner) : style;
             const col = axis(css.gridColumnStart, css.gridColumnEnd, columns.length);
@@ -99,22 +140,22 @@ export function applyFigmaGridLayout(root: HTMLElement, result: ConvertResult): 
                 else { c++; if (c >= columns.length) { c = 0; r++; } }
             }
             for (let y = r; y < r + row.span; y++) for (let x = c; x < c + col.span; x++) occupied.add(`${y}:${x}`);
-            cursor = r * columns.length + c + col.span;
-            return { row: r, column: c, rowSpan: row.span, columnSpan: col.span };
-        });
+            if (!explicit) cursor = r * columns.length + c + col.span;
+            placements[index] = { row: r, column: c, rowSpan: row.span, columnSpan: col.span };
+        }
         const rowIds = Array.from({ length: Math.max(...placements.map(p => p.row + p.rowSpan)) }, guid);
         const flexRows = fixedHeight && /fr/.test(declaration(element, 'grid-template-rows'));
+        const rowTracks = authoredTracks(declaration(element, 'grid-template-rows'), rowIds.length);
         const positions = (ids: typeof columnIds) => ({ entries: ids.map((id, index) => ({ id, position: String(index).padStart(6, '0') })) });
         Object.assign(node, {
             stackMode: 'GRID', stackWrap: 'NO_WRAP', stackPrimarySizing: 'FIXED',
             stackCounterSizing: fixedHeight ? 'FIXED' : 'RESIZE_TO_FIT_WITH_IMPLICIT_SIZE',
             gridColumns: positions(columnIds), gridRows: positions(rowIds), gridAutoTracks: 'ROWS', gridReflowEnabled: true,
             gridColumnGap: parseFloat(style.columnGap) || 0, gridRowGap: parseFloat(style.rowGap) || 0,
-            gridColumnsSizing: { entries: columnIds.map((id, index) => ({ id, trackSize: {
-                minSizing: { type: 'FIXED', value: flexible ? 0 : columns[index] },
-                maxSizing: { type: flexible ? 'FLEX' : 'FIXED', value: columns[index] },
-            } })) },
-            gridRowsSizing: { entries: rowIds.map(id => ({ id, trackSize: { minSizing: { type: flexRows ? 'FIXED' : 'HUG', value: flexRows ? 0 : 1 }, maxSizing: { type: flexRows ? 'FLEX' : 'HUG', value: 1 } } })) },
+            gridColumnsSizing: { entries: columnIds.map((id, index) => ({ id, trackSize: trackSizing(columnTracks[index], columns[index]) })) },
+            gridRowsSizing: { entries: rowIds.map((id, index) => ({ id, trackSize: /^[\d.]+px$/.test(rowTracks[index]) || flexRows && /fr/.test(rowTracks[index])
+                ? trackSizing(rowTracks[index], parseFloat(rowTracks[index]))
+                : { minSizing: { type: 'HUG', value: 1 }, maxSizing: { type: 'HUG', value: 1 } } })) },
         });
         children.forEach((child, index) => {
             const sizing = itemSizing(child);

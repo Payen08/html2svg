@@ -98,7 +98,7 @@ export function serializeCaptureDocument(source: Document): { html: string; url:
                 // Keep the authored sizing policy separately from the frozen pixel box.
                 // Auto Layout must still distinguish auto/percent from fixed sizes.
                 const typed = (node as HTMLElement & { computedStyleMap?: () => Map<string, unknown> }).computedStyleMap?.();
-                for (const axis of ['width', 'height']) {
+                for (const axis of ['width', 'height', 'grid-template-columns', 'grid-template-rows']) {
                     const sizing = typed?.get(axis)?.toString();
                     if (sizing) target.setAttribute(`data-html2svg-sizing-${axis}`, sizing);
                 }

@@ -48,7 +48,7 @@ npm ci
 npm run desktop:dmg
 ```
 
-The installer is written to `release/HTML2SVG-Artboard-0.1.6-mac-arm64.dmg`. Open it and drag **HTML2SVG Artboard** to **Applications**. The application includes Chromium, the compiled UI, local proxy and font service; Node.js and a separate development server are not required. HTML rendering, SVG export and Figma copying work locally; remote page capture requires access to the target network.
+The installer is written to `release/HTML2SVG-Artboard-0.1.7-mac-arm64.dmg`. Open it and drag **HTML2SVG Artboard** to **Applications**. The application includes Chromium, the compiled UI, local proxy and font service; Node.js and a separate development server are not required. HTML rendering, SVG export and Figma copying work locally; remote page capture requires access to the target network.
 
 `npm run desktop:dev` builds and launches the packaged app. `npm run desktop:pack` creates the `.app` without a disk image. `node scripts/build-icon.mjs` regenerates the icon from `assets/logo.png`.
 
@@ -63,3 +63,14 @@ Native Figma Grid export preserves CSS column/row spans and explicit track ancho
 Full-bleed content using negative margins can cancel page padding across single-child shells, preserving the captured canvas origin without stripping padding shared with unrelated content.
 
 Absolute containing blocks retain their measured size, including auto dimensions constrained by opposing insets. Mixed inline text, emphasis and units use horizontal baseline-aligned native layouts.
+
+
+## Figma layout reliability (0.1.7)
+
+Auto Layout is the default. Conversion now keeps an independent geometric baseline, applies layout rules, restores only unsupported relationships, and validates the final hierarchy before encoding. Unsupported local containers are explicitly reported after copying; their editable layers retain captured positions rather than being silently forced into Auto Layout. This does not make those preserved portions responsive.
+
+Supported native rules include horizontal/vertical Flex, editable wrapping text, gaps/padding, shared table columns, explicit grid placements and spans, mixed fixed/fractional grid columns, fixed pixel rows, and fractional rows in fixed-height grids. Fixed overlays retain a viewport-sized root even when the document body has no normal-flow height.
+
+Conservative preservation currently covers transformed subtrees, reverse Flex, space-around/evenly distribution, named grid areas, column-flow grids, multicolumn/vertical writing, RTL, and float relationships. Arbitrary CSS is not guaranteed to reproduce all browser layout behavior in Figma.
+
+For whole-page regression, run the local server and open `tests/fixtures/figma-regression-suite.html`, then click **运行全部布局回归**. Eight cases cover cards/icons, whole-page columns/maps, portrait scaling, tables, modal/form controls, absolute positioning/inline baselines, unsupported local layouts, and mixed grid tracks. Each case converts and round-trips the native clipboard encoding. The release was additionally pasted into Figma to verify actual layout; widening the mixed grid from 900 to 1100 kept the sidebar at 240 and grew the content from 644 to 844. Long button text increased the button height from 48 to 144, and adding/removing a sibling was checked.

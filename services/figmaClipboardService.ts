@@ -1,3 +1,4 @@
+import { captureFigmaLayoutBaseline, applyFigmaLayoutSafety, validateFigmaLayout, type FigmaLayoutReport } from './figmaLayoutSafetyService';
 import { prepareFigmaFormControls } from './figmaFormService';
 import { preserveSvgImageLayers } from './figmaSvgImageService';
 import { preserveFigmaLayout } from './figmaPreserveLayoutService';
@@ -31,6 +32,8 @@ function loadPingFangFile(weight: number): Promise<ArrayBuffer> {
 
 export type FigmaLayoutMode = 'preserve' | 'auto';
 const prepared = new WeakMap<FigmaCopySource, Map<string, Promise<string>>>();
+const layoutReports = new WeakMap<FigmaCopySource, Map<string, FigmaLayoutReport>>();
+export type FigmaConversionResult = ConvertResult & {layoutReport?:FigmaLayoutReport};
 
 /** Preserve the rich HTML envelope: plain SVG/JSON cannot carry auto-layout. */
 export function writeRichClipboard(html: string): void {
@@ -65,7 +68,7 @@ export function writeRichClipboard(html: string): void {
     }
 }
 
-export async function convertPageToFigma(source: FigmaCopySource, name = 'Captured page', layout: FigmaLayoutMode = 'auto', onProgress?: (message: string) => void): Promise<ConvertResult> {
+export async function convertPageToFigma(source: FigmaCopySource, name = 'Captured page', layout: FigmaLayoutMode = 'auto', onProgress?: (message: string) => void): Promise<FigmaConversionResult> {
     const iframe = document.createElement('iframe');
     iframe.setAttribute('sandbox', 'allow-same-origin');
     iframe.style.cssText = `position:fixed;left:0;top:0;width:${source.width}px;height:${source.height}px;opacity:0;pointer-events:none;border:0;z-index:-9999`;
@@ -153,19 +156,23 @@ export async function convertPageToFigma(source: FigmaCopySource, name = 'Captur
         }
         // A failed font/image conversion must not report an empty design as success.
         if (result.document.nodeChanges.length <= 3) throw new Error('没有生成可复制的 Figma 图层，请重新捕获页面。');
+        let layoutReport: FigmaLayoutReport | undefined;
         if (layout === 'auto') {
+            const baseline = captureFigmaLayoutBaseline(result);
             applyFigmaAutoLayout(liveDoc.body, result);
             applyFigmaAlignment(liveDoc.body, result);
             applyFigmaGridLayout(liveDoc.body, result);
             applyFigmaTableLayout(liveDoc.body, result, tablePlans);
+            layoutReport = applyFigmaLayoutSafety(liveDoc.body, result, baseline);
             compactFigmaRoot(result, name);
         } else {
             // Keep the viewport shell: removing it can lose the portrait size,
             // clipping boundary and the positions of fixed overlays.
             preserveFigmaLayout(liveDoc.body, result, source.width, source.height);
         }
+        validateFigmaLayout(result);
         normalizePingFangNames(result.document.nodeChanges);
-        return result;
+        return Object.assign(result, {layoutReport});
     } finally {
         iframe.remove();
     }
@@ -173,17 +180,22 @@ export async function convertPageToFigma(source: FigmaCopySource, name = 'Captur
 
 export async function prepareFigmaClipboard(source: FigmaCopySource, name = 'Captured page', layout: FigmaLayoutMode = 'auto', onProgress?: (message: string) => void): Promise<string> {
     const result = await convertPageToFigma(source, name, layout, onProgress);
+    if (result.layoutReport) {
+        const reports = layoutReports.get(source) || new Map();
+        reports.set(JSON.stringify([layout, name || 'Captured page']), result.layoutReport);
+        layoutReports.set(source, reports);
+    }
     const { encodeFigmaData, composeClipboardHtml } = await import('@figit/fig-kiwi');
     return composeClipboardHtml(encodeFigmaData(result.document).base64);
 }
 
-export async function copyFigmaToClipboard(source: FigmaCopySource, name?: string, layout: FigmaLayoutMode = 'auto', onProgress?: (message: string) => void): Promise<void> {
+export async function copyFigmaToClipboard(source: FigmaCopySource, name?: string, layout: FigmaLayoutMode = 'auto', onProgress?: (message: string) => void): Promise<FigmaLayoutReport | undefined> {
     let variants = prepared.get(source);
     if (!variants) {
         variants = new Map();
         prepared.set(source, variants);
     }
-    const cacheKey = JSON.stringify([layout, name]);
+    const cacheKey = JSON.stringify([layout, name || 'Captured page']);
     let html = variants.get(cacheKey);
     if (!html) {
         onProgress?.("准备页面…");
@@ -195,7 +207,7 @@ export async function copyFigmaToClipboard(source: FigmaCopySource, name?: strin
         const value = await html;
         onProgress?.("写入剪贴板…");
         await window.html2svgDesktop.copyFigma(value);
-        return;
+        return layoutReports.get(source)?.get(cacheKey);
     }
     if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
         try {
@@ -204,10 +216,11 @@ export async function copyFigmaToClipboard(source: FigmaCopySource, name?: strin
                 'text/html': html.then(value => new Blob([value], { type: 'text/html' })),
                 'text/plain': new Blob(['Figma design'], { type: 'text/plain' }),
             })]);
-            return;
+            return layoutReports.get(source)?.get(cacheKey);
         } catch {
             // Local HTTP and clipboard permission restrictions use a copy event.
         }
     }
     writeRichClipboard(await html);
+    return layoutReports.get(source)?.get(cacheKey);
 }

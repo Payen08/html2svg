@@ -31,8 +31,8 @@ test('a centered 50px SVG stays fixed inside a 90px icon container after encodin
  assert.deepEqual(svg.size,{x:50,y:50});assert.equal(svg.stackChildPrimaryGrow,0);assert.equal(svg.stackChildAlignSelf,'AUTO');
 });
 
-function spanGrid(items,rows='none',height='auto'){
- const guid=id=>({sessionID:0,localID:id});const grid={namespaceURI:'http://www.w3.org/1999/xhtml',computedStyleMap:()=>new Map([['grid-template-columns','repeat(12, minmax(0px, 1fr))'],['grid-template-rows',rows],['height',height]]),css:{display:'grid',gridTemplateColumns:Array(12).fill('100px').join(' '),alignItems:'normal',justifyItems:'normal',columnGap:'12px',rowGap:'12px'}};
+function spanGrid(items,rows='none',height='auto',template='repeat(12, minmax(0px, 1fr))'){
+ const guid=id=>({sessionID:0,localID:id});const grid={namespaceURI:'http://www.w3.org/1999/xhtml',computedStyleMap:()=>new Map([['grid-template-columns',template],['grid-template-rows',rows],['height',height]]),css:{display:'grid',gridTemplateColumns:(template.startsWith('240px')?['240px',...Array(11).fill('100px')]:Array(12).fill('100px')).join(' '),alignItems:'normal',justifyItems:'normal',columnGap:'12px',rowGap:'12px'}};
  const elements=new Map([['.grid',grid],...items.map((css,i)=>['.item'+i,{namespaceURI:grid.namespaceURI,css:{display:'block',...css},computedStyleMap:()=>new Map()}])]);
  const root={querySelector:p=>elements.get(p),ownerDocument:{defaultView:{getComputedStyle:e=>e.css}}};
  const nodes=[{guid:guid(2),type:'FRAME',name:'Grid',size:{x:1332,y:600}},...items.map((_,i)=>({guid:guid(3+i),type:'FRAME',name:'Item '+i,stackMode:'VERTICAL',parentIndex:{guid:guid(2),position:String(i)}}))];
@@ -50,4 +50,15 @@ test('explicit placement and multi-row spans reserve occupied cells for automati
 });
 test('fractional CSS rows fill fixed-height dashboard space rather than shrinking to text',()=>{
  const [grid]=spanGrid([{gridColumnStart:'span 12'}],'minmax(0px, 1fr)','100%');assert.equal(grid.gridRowsSizing.entries[0].trackSize.maxSizing.type,'FLEX');assert.equal(grid.stackCounterSizing,'FIXED');
+});
+
+test('mixed fixed/fractional tracks keep the sidebar fixed and preserve minimums',()=>{
+ const [grid]=spanGrid([{gridColumnStart:'1',gridRowStart:'1'}],'none','auto','240px repeat(11, minmax(80px, 1fr))');const tracks=grid.gridColumnsSizing.entries.map(e=>e.trackSize);assert.equal(tracks[0].maxSizing.type,'FIXED');assert.equal(tracks[0].maxSizing.value,240);assert.equal(tracks[1].maxSizing.type,'FLEX');assert.equal(tracks[1].maxSizing.value,1);assert.equal(tracks[1].minSizing.value,80);
+});
+test('explicit later siblings reserve their cells before auto-placed children',()=>{
+ const [grid,automatic,explicit]=spanGrid([{}, {gridColumnStart:'1',gridRowStart:'1',gridColumnEnd:'span 2'}]);assert.deepEqual(explicit.gridColumnAnchor,grid.gridColumns.entries[0].id);assert.deepEqual(automatic.gridColumnAnchor,grid.gridColumns.entries[2].id);assert.deepEqual(automatic.gridRowAnchor,explicit.gridRowAnchor);
+});
+
+test('explicit pixel rows retain their heights with an automatic container height',()=>{
+ const [grid]=spanGrid([{}],'240px');assert.equal(grid.gridRowsSizing.entries[0].trackSize.maxSizing.type,'FIXED');assert.equal(grid.gridRowsSizing.entries[0].trackSize.maxSizing.value,240);
 });

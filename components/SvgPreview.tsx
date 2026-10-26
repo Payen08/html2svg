@@ -22,6 +22,8 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
   const [isCopying, setIsCopying] = useState(false);
   const [figmaCopied, setFigmaCopied] = useState(false);
   const [isFigmaCopying, setIsFigmaCopying] = useState(false);
+  const [figmaSummary, setFigmaSummary] = useState('Figma 已复制');
+  const [figmaLayoutNotes, setFigmaLayoutNotes] = useState('');
   const [figmaProgress, setFigmaProgress] = useState("准备 Figma…");
   const [figmaLayout, setFigmaLayout] = useState<FigmaLayoutMode>('auto');
   const [zoom, setZoom] = useState(1);
@@ -87,7 +89,9 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
     setCopied(false);
     setFigmaCopied(false);
     try {
-      await copyFigmaToClipboard(effectiveFigmaSource, activePage?.name || 'Captured page', figmaLayout, setFigmaProgress);
+      const report = await copyFigmaToClipboard(effectiveFigmaSource, activePage?.name || 'Captured page', figmaLayout, setFigmaProgress);
+      setFigmaSummary(report?.preserved.length ? `已复制（${report.preserved.length} 处保留原布局）` : 'Figma 已复制');
+      setFigmaLayoutNotes(report?.preserved.map(item => `${item.name}：${item.reason}`).join('；') || '');
       setFigmaCopied(true);
     } catch (error) {
       setCopyError(error instanceof Error ? error.message : '复制 Figma 失败，请重试。');
@@ -283,10 +287,10 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
             isLoading={isFigmaCopying}
             disabled={!effectiveFigmaSource || isCopying}
             className="h-8 px-3 text-xs whitespace-nowrap"
-            title={effectiveFigmaSource ? (figmaLayout === 'preserve' ? '保留捕获尺寸和图层位置，文字与图形可编辑' : '转换为自适应布局，复杂页面的位置和换行可能变化') : '请重新捕获或使用 Figma SVG 渲染，保存页面布局后即可复制'}
+            title={effectiveFigmaSource ? (figmaLayout === 'preserve' ? '保留捕获尺寸和图层位置，文字与图形可编辑' : '转换为自适应布局；不支持的复杂局部保留原位置，并在复制完成后显示数量') : '请重新捕获或使用 Figma SVG 渲染，保存页面布局后即可复制'}
             icon={figmaCopied ? <Check className="w-4 h-4 text-green-400" /> : <Figma className="w-4 h-4" />}
           >
-            {isFigmaCopying ? figmaProgress : figmaCopied ? 'Figma 已复制' : '复制 Figma'}
+            {isFigmaCopying ? figmaProgress : figmaCopied ? figmaSummary : '复制 Figma'}
           </Button>
           <Button
             variant="secondary"
@@ -325,6 +329,7 @@ export const SvgPreview: React.FC<SvgPreviewProps> = ({ svgContent, isLoading, p
       {(copied || figmaCopied || copyError) && (
         <div role={copyError ? 'alert' : 'status'} className={`px-3 py-2 text-xs border-b border-gray-800 ${copyError ? 'text-red-300 bg-red-950/30' : 'text-emerald-300 bg-emerald-950/30'}`}>
           {copyError || (figmaCopied ? 'Figma 图层已复制，在 Figma Design 画布中按 ⌘V / Ctrl+V 粘贴。' : 'SVG 已复制，在 Figma 画布中按 ⌘V / Ctrl+V 粘贴。')}
+          {!copyError && figmaCopied && figmaLayoutNotes && <div className="mt-1 text-amber-200">以下局部保留原布局，未转换为自动布局：{figmaLayoutNotes}</div>}
         </div>
       )}
 
